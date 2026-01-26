@@ -6,19 +6,25 @@ readme = "README.md"
 requires-python = ">=3.11.4"
 dependencies = [
     "ipykernel>=7.1.0",
+    "matplotlib>=3.10.8",
+    "ocha-stratus>=0.1.7",
+    "openpyxl>=3.1.5",
     "pre-commit>=4.5.1",
     "ruff>=0.14.13",
 ]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py311"
+exclude = ["build", "dist", ".venv", ".git"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+# Consolidated linter settings (moved from top-level to avoid deprecation warnings)
+select = ["E", "F", "W", "C90", "I"]
+extend-ignore = ["E203"]
 ignore = [
-  "E501",  # long lines (plots, URLs, arrays)
-  "F841",  # assigned but unused (notebooks, exploration)
+  "E501",
+  "F841",
 ]
 
 [tool.ruff.format]
