@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import ocha_stratus as stratus
 import pandas as pd
-from scipy.stats import linregress, pearsonr, spearmanr
+from scipy.stats import linregress, pearsonr, spearmanr, t
 
 from src.constants import ISO3, PROJECT_PREFIX
 
@@ -58,22 +58,25 @@ NAME_FIXES = {
 NAME_FIXES.update({f"{x}e arrondissement": f"arrondissement {x}" for x in range(9)})
 
 # Rows whose commune is missing or inconsistent with the sous-prefecture /
-# locality columns, reassigned by hand in the notebook (row index -> adm3).
+# locality columns, reassigned by hand: row index -> (expected sous-prefecture,
+# expected alert date, adm3). The expected values guard against the sheet being
+# re-sorted upstream, which would otherwise move an override onto another alert.
 ROW_OVERRIDES = {
-    84: "mongoumba",
-    223: "ouham fafa",
-    88: "kaga-bandoro",
-    89: "paoua",
-    96: "arrondissement 1",
-    127: "ouham fafa",
-    115: "ouham fafa",
-    107: "mbaiki",
-    # Added for the site build: commune field contradicts the sous-prefecture,
-    # locality and coordinates (caught by the prefecture check below).
-    44: "mongoumba",  # Mongoumba / Zinga, commune "Mbaiki"
-    87: "batangafo",  # Batangafo / Batangafo, commune "Mbaïki"
-    97: "bimbo",  # Bangui-Fleuve / Begoua (the other Bégoua alerts are Bimbo), commune "Mbaïki"
-    146: "samba-boungou",  # Bria / Bria centre, commune "Yéngou" (Yéngou is in Ippy, Ouaka)
+    # from the notebook
+    84: ("Mongoumba", "2022-10-24", "mongoumba"),
+    223: ("Bouca", "2025-10-17", "ouham fafa"),
+    88: ("Kaga-Bandoro", "2022-09-30", "kaga-bandoro"),
+    89: ("Paoua", "2022-09-30", "paoua"),
+    96: ("Bangui-Fleuve", "2023-11-25", "arrondissement 1"),
+    127: ("Kabo", "2023-09-07", "ouham fafa"),
+    115: ("Bouca", "2023-05-06", "ouham fafa"),
+    107: ("Mbaïki", "2023-03-22", "mbaiki"),
+    # added for the site build: the commune field contradicts the sous-prefecture,
+    # locality and coordinates (caught by check_prefectures below)
+    44: ("Mongoumba", "2022-07-22", "mongoumba"),  # locality Zinga, commune "Mbaiki"
+    87: ("Batangafo", "2022-11-15", "batangafo"),  # locality Batangafo, commune "Mbaïki"
+    97: ("Bangui-Fleuve", "2023-11-25", "bimbo"),  # locality Begoua (other Bégoua alerts: Bimbo)
+    146: ("Bria", "2024-04-21", "samba-boungou"),  # Bria centre; Yéngou is in Ippy, Ouaka
 }
 
 # Prefectures created in the 2020-21 reform -> the COD (FieldMaps) prefecture that
@@ -114,8 +117,14 @@ def match_adm3(df: pd.DataFrame, adm3: pd.DataFrame) -> pd.DataFrame:
     norm = normalize(df["Commune"])
     df["adm3_match"] = norm.replace(NAME_FIXES)
     df["match_method"] = np.where(df["adm3_match"] != norm, "name_fix", "name")
-    df.loc[list(ROW_OVERRIDES), "adm3_match"] = pd.Series(ROW_OVERRIDES)
-    df.loc[list(ROW_OVERRIDES), "match_method"] = "row_override"
+    for i, (sous_pref, day, target) in ROW_OVERRIDES.items():
+        row = df.loc[i]
+        if (
+            row["Sous-préfecture"] != sous_pref
+            or str(pd.Timestamp(row["Date alerte"]).date()) != day
+        ):
+            raise ValueError(f"override row {i} is no longer {sous_pref} {day}: sheet changed?")
+        df.loc[i, ["adm3_match", "match_method"]] = [target, "row_override"]
 
     # adm3 names are not unique (two "Nola"); only match on names that are,
     # and fail loudly if an impact row lands on an ambiguous or unknown one.
@@ -279,6 +288,7 @@ def main() -> None:
     events.to_csv(PROC / "impact_events_adm3.csv", index=False)
 
     # --- impact aggregates -------------------------------------------------
+    assert events["year"].isin(IMPACT_YEARS).all(), "alerts outside the expected years"
     grid = pd.MultiIndex.from_product([IMPACT_YEARS, range(1, 13)], names=["year", "month"])
     monthly = (
         events.groupby(["year", "month"])
@@ -311,6 +321,10 @@ def main() -> None:
     # --- rainfall: ERA5 + IMERG monthly totals ----------------------------
     rain = pd.concat([era5_monthly_mm(era5), imerg_monthly_mm(imerg)], ignore_index=True)
     rain = rain.sort_values(["product", "year", "month"]).reset_index(drop=True)
+    # a dropped IMERG month would make the cumulative totals silently too low
+    for product in PRODUCTS:
+        got = rain[(rain["product"] == product) & rain["year"].isin(IMPACT_YEARS)]
+        assert len(got) == 12 * len(IMPACT_YEARS), f"{product} is missing months in {IMPACT_YEARS}"
     rain["cumul_mm"] = rain.groupby(["product", "year"])["precip_mm"].cumsum()
     clim = (
         rain[rain["year"].between(*CLIM_YEARS)]
@@ -352,7 +366,7 @@ def main() -> None:
                     "period": f"{y0}-{y1}",
                     "month": m,
                     "slope_mm_per_decade": 10 * res.slope,
-                    "ci95_mm_per_decade": 10 * 1.96 * res.stderr,
+                    "ci95_mm_per_decade": 10 * t.ppf(0.975, len(sel) - 2) * res.stderr,
                     "p_value": res.pvalue,
                 }
             )
@@ -369,7 +383,7 @@ def main() -> None:
                 "period": f"{y0}-{y1}",
                 "month": 0,
                 "slope_mm_per_decade": 10 * res.slope,
-                "ci95_mm_per_decade": 10 * 1.96 * res.stderr,
+                "ci95_mm_per_decade": 10 * t.ppf(0.975, len(sel) - 2) * res.stderr,
                 "p_value": res.pvalue,
             }
         )

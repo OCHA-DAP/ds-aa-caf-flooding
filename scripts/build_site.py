@@ -10,6 +10,7 @@ scripts/publish.sh for the encrypt + gh-pages step.
 
 import base64
 import gzip
+import html
 import json
 import re
 from datetime import date
@@ -79,8 +80,9 @@ def records(df: pd.DataFrame, cols: dict) -> list[dict]:
 
 
 def embed_json(obj) -> str:
-    # Safe inside <script type="application/json">: no "</" can close the tag.
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    # Safe inside <script type="application/json">: no "<" survives, so nothing
+    # in the data can close the tag or open a comment.
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
 
 
 def file_entry(group: str, path: Path, desc: str) -> dict:
@@ -98,10 +100,14 @@ def file_entry(group: str, path: Path, desc: str) -> dict:
     }
 
 
+# Slots that take code or JSON verbatim; every other value is escaped as text.
+RAW_SLOTS = {"CSS", "JS", "HERO_JS", "DATA", "FILES"}
+
+
 def fill(template: str, values: dict) -> str:
     out = template
     for k, v in values.items():
-        out = out.replace("{{" + k + "}}", str(v))
+        out = out.replace("{{" + k + "}}", v if k in RAW_SLOTS else html.escape(str(v)))
     left = re.findall(r"\{\{[A-Z0-9_]+\}\}", out)
     if left:
         raise ValueError(f"unfilled placeholders: {sorted(set(left))}")
@@ -232,6 +238,7 @@ def main() -> None:
         "RHO_ANOM_ERA5": f"{mc[('ERA5', 'anom')]['rho']:.2f}".replace("-", "−"),
         "RHO_ANOM_IMERG": f"{mc[('IMERG', 'anom')]['rho']:.2f}".replace("-", "−"),
         "TREND_ERA5": signed(era5_98["slope_mm_per_decade"]),
+        "TREND_ERA5_ABS": f"{abs(era5_98['slope_mm_per_decade']):.0f}",
         "TREND_ERA5_CI": f"{era5_98['ci95_mm_per_decade']:.0f}",
         "TREND_ERA5_FULL": signed(era5_81["slope_mm_per_decade"]),
         "TREND_ERA5_FULL_PCT": f"{100 * abs(era5_81['slope_mm_per_decade']) / clim_era5:.0f}",

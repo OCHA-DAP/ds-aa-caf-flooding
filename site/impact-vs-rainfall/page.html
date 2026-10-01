@@ -56,7 +56,7 @@
           removed, wetter-than-usual months are not clearly worse (ρ&nbsp;=&nbsp;{{RHO_ANOM_ERA5}} ERA5,
           {{RHO_ANOM_IMERG}} IMERG).</li>
       <li><strong>The two rainfall products disagree on the long-term change.</strong> ERA5 has national
-          rainfall falling by {{TREND_ERA5}}&nbsp;mm per decade since 1998, which puts every year
+          rainfall falling by {{TREND_ERA5_ABS}}&nbsp;mm per decade since 1998, which puts every year
           2021–2025 among the driest on its record. IMERG shows {{TREND_IMERG}}&nbsp;mm per decade over
           the same period. Treat ERA5's year-to-year signal over CAR with caution.</li>
     </ol>
@@ -139,7 +139,7 @@
 
     <div class="caution"><strong>ERA5's trend over CAR is suspect.</strong> Over 1998–2025 ERA5 shows
       {{TREND_ERA5}}&nbsp;±&nbsp;{{TREND_ERA5_CI}}&nbsp;mm per decade, and over its full 1981–2025 record
-      {{TREND_ERA5_FULL}}&nbsp;mm per decade (about {{TREND_ERA5_FULL_PCT}}% of the 1991–2020 average per decade).
+      {{TREND_ERA5_FULL}}&nbsp;mm per decade (about {{TREND_ERA5_FULL_PCT}}% of its 2001–2020 average per decade).
       IMERG shows {{TREND_IMERG}}&nbsp;±&nbsp;{{TREND_IMERG_CI}}&nbsp;mm per decade. A drying that steep, in every
       month, would be a dramatic regional signal. A drift in the reanalysis, which assimilates very few
       rain-gauge observations over CAR, is the more likely explanation, but it hasn't been checked against
@@ -206,8 +206,8 @@
       <li><strong>Impact data.</strong> OCHA CAR's “Données inondations” compilation (sheet <code>DATA FOR PBI</code>):
         {{N_EVENTS}} alerts dated {{FIRST_ALERT}} to {{LAST_ALERT}}. A public version through 2024 ({{N_HDX}} alerts) is
         <a href="https://data.humdata.org/dataset/republique-centrafricaine-situation-des-inondations">on HDX</a> (CC BY).
-        The copy used here adds {{N_EXTRA_2024}} later 2024 alerts and {{N_2025}} from 2025 that are not on HDX, so
-        this page is password-protected. Coverage is whatever was reported and may vary by year and area. A month
+        The copy used here adds {{N_EXTRA_2024}} later 2024 alerts and {{N_2025}} from 2025 that are not on HDX (and
+        revises a few earlier rows slightly), so this page is password-protected. Coverage is whatever was reported and may vary by year and area. A month
         with no alert means nothing was recorded, not that nothing happened.</li>
       <li><strong>People affected</strong> is the <code>Individus affecté</code> column ({{N_NULL_PEOPLE}} alerts have no
         figure and count as zero), and households is <code>Ménage affecté</code>. Counts are summed across alerts, so a
@@ -227,7 +227,7 @@
         monthly totals. IMERG daily values are averaged per month and scaled to the month's length; months with fewer
         than 25 days of data are dropped. Anomalies are against each product's own 2001–2020 monthly average.
         Annual totals use complete years only (2026 is excluded).</li>
-      <li><strong>Statistics.</strong> Trends are least-squares per calendar month, with 95% CI = ±1.96 standard errors
+      <li><strong>Statistics.</strong> Trends are least-squares per calendar month, with a t-based 95% confidence interval
         (no autocorrelation adjustment). Correlations are Pearson r with two-sided p, plus Spearman ρ, over n = 5 years
         or n = 60 months. This is exploratory: many comparisons, no correction for multiple testing.</li>
       <li><strong>Not a trigger.</strong> No forecast is evaluated here. The repository README states the work is not

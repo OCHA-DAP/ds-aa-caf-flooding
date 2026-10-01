@@ -46,10 +46,14 @@ done
 # branches in the working tree (where the unencrypted build sits untracked).
 git fetch -q origin
 WT="$(mktemp -d)/gh-pages"
+trap 'git worktree remove --force "$WT" 2>/dev/null || true' EXIT
 git worktree prune
 if git rev-parse -q --verify origin/gh-pages >/dev/null; then
   git worktree add -q -B gh-pages "$WT" origin/gh-pages
 else
+  # first publish: start an orphan branch (dropping any local gh-pages left by a
+  # failed earlier attempt, which never reached origin)
+  git branch -D gh-pages >/dev/null 2>&1 || true
   git worktree add -q --detach "$WT"
   (
     cd "$WT"
@@ -58,7 +62,6 @@ else
     find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
   )
 fi
-trap 'git worktree remove --force "$WT" 2>/dev/null || true' EXIT
 
 for p in "${PAGES[@]}"; do
   mkdir -p "$WT/$(dirname "$p")"
