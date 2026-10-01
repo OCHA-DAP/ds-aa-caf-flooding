@@ -79,7 +79,8 @@ touch "$WT/.nojekyll"
   if git diff --cached --quiet && git rev-parse -q --verify HEAD >/dev/null; then
     echo "nothing changed — not publishing"
   else
-    git commit -q -m "Publish site $(date +%F)"
+    # --no-verify: the repo's pre-commit config does not exist on gh-pages
+    git commit -q --no-verify -m "Publish site $(date +%F)"
     git push -q origin gh-pages
   fi
 )
