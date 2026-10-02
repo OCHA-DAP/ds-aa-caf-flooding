@@ -49,14 +49,17 @@ PROCESSED_FILES = {
     "impact_adm3_by_year.csv": "Alerts and people affected per commune (adm3) and year",
     "impact_adm1_by_year.csv": "Alerts and people affected per prefecture (adm1) and year",
     "rain_monthly.csv": "ERA5, IMERG and CHIRPS monthly national totals (mm), cumulative since "
-    "January, 2001–2020 average and anomaly, 1998–2025 linear trend and detrended anomaly",
-    "rain_annual.csv": "ERA5, IMERG and CHIRPS annual national totals and detrended anomalies "
-    "(mm), complete years only",
+    "January, 2001–2020 average and anomaly, 1998–2025 linear trend, and detrended anomaly "
+    "(1998–2025 only)",
+    "rain_annual.csv": "ERA5, IMERG and CHIRPS annual national totals (complete years) and "
+    "detrended anomalies (1998–2025 only), mm",
     "rain_trends.csv": "Linear trend per calendar month (month 0 = annual), mm/decade with 95% CI",
-    "impact_vs_rain_annual.csv": "People affected per year alongside each product's annual rainfall",
-    "impact_vs_rain_monthly.csv": "People affected per month alongside monthly rainfall and anomalies",
+    "impact_vs_rain_annual.csv": "People affected per year alongside each product's annual "
+    "rainfall, raw and detrended",
+    "impact_vs_rain_monthly.csv": "People affected per month alongside each product's monthly "
+    "rainfall, anomaly and detrended anomaly",
     "cumulative_rain_correlation.csv": "Correlation of rain accumulated since January with that "
-    "year's people affected, per product and month",
+    "year's people affected, per product, month and basis (raw or detrended)",
     "adm3_impact.geojson": "Commune (adm3) boundaries, simplified, with totals 2021–2025",
     "adm1_impact.geojson": "Prefecture (adm1) boundaries, simplified, with totals 2021–2025",
 }
@@ -125,8 +128,10 @@ def readme(today: str) -> str:
         "",
         "Impact: OCHA CAR flood compilation (sheet DATA FOR PBI), 2021-2025. People affected =",
         "'Individus affecté', households = 'Ménage affecté'; blanks count as zero in sums.",
-        "Rainfall: national (adm0) zonal means of ERA5 (monthly) and IMERG late v7 (daily),",
-        "converted to monthly totals in mm. Anomalies are vs each product's 2001-2020 mean.",
+        "Rainfall: national (adm0) means of ERA5 (monthly), IMERG late v7 (daily) and CHIRPS v3",
+        "(monthly), as monthly totals in mm. Anomalies are vs each product's 2001-2020 mean.",
+        "Detrended = residual from a linear trend fitted per product and calendar month over",
+        "1998-2025; it is blank outside those years (it would be an extrapolation).",
         "",
         "Files:",
     ]
@@ -172,6 +177,8 @@ def main() -> None:
     era5_a = rain_a[rain_a["product"] == "ERA5"].set_index("year")["precip_mm"]
     clim_era5 = rain_m[rain_m["product"] == "ERA5"].groupby("month")["clim_mm"].first().sum()
     n_drier = int((era5_a.loc[1981:2025] <= era5_a.loc[YEARS].max()).sum())
+    # the findings list says "its five driest years" outright
+    assert n_drier == len(YEARS), n_drier
     rank_text = (
         f"the five impact years 2021–2025 are the five driest years in ERA5's {len(era5_a.loc[1981:2025])}-year record"
         if n_drier == len(YEARS)
@@ -179,6 +186,8 @@ def main() -> None:
     )
     chirps_98 = tr.loc[("CHIRPS", "1998-2025", 0)]
     chirps_81 = tr.loc[("CHIRPS", "1981-2025", 0)]
+    # the text calls both CHIRPS trends not significant
+    assert chirps_98["p_value"] > 0.05 and chirps_81["p_value"] > 0.05
     # CHIRPS spreads the impact years across its record; the caution box says so
     chirps_a = rain_a[rain_a["product"] == "CHIRPS"].set_index("year")["precip_mm"]
     chirps_pct = chirps_a.loc[1981:2025].rank(pct=True).loc[YEARS]

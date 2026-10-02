@@ -54,17 +54,18 @@
           r&nbsp;=&nbsp;{{R_CHIRPS}} (CHIRPS) and {{R_IMERG}} (IMERG). {{WETTEST_TEXT}}</li>
       <li><strong>Month to month, the link is mostly the shared season.</strong> Monthly rainfall and people
           affected rank-correlate (ρ&nbsp;≈&nbsp;{{RHO_TOTAL}}), but once each month's usual rainfall or its
-          trend is removed, wetter-than-usual months are not generally worse (ρ&nbsp;{{RHO_ANOM_RANGE}}). One month carries
-          most of the linear correlation: {{BIG_MONTH}} ({{BIG_PEOPLE}} people affected) was much wetter than usual
-          in all three products. Pearson r is {{R_ANOM_RANGE}} with it and {{R_ANOM_RANGE_X}} without it.</li>
+          trend is removed, wetter-than-usual months are not generally worse (ρ&nbsp;{{RHO_ANOM_RANGE}}). Much of the
+          linear correlation comes from one month: {{BIG_MONTH}} ({{BIG_PEOPLE}} people affected) was much wetter
+          than usual in all three products. Pearson r is {{R_ANOM_RANGE}} with it and {{R_ANOM_RANGE_X}} without it
+          (ERA5 keeps the most).</li>
       <li><strong>ERA5's drying over CAR is very likely an artefact.</strong> ERA5 has national rainfall
           falling by {{TREND_ERA5_ABS}}&nbsp;mm per decade since 1998, which makes 2021–2025 its five driest
           years. CHIRPS, which blends in rain-gauge data, shows no significant change
           ({{TREND_CHIRPS}}&nbsp;±&nbsp;{{TREND_CHIRPS_CI}}&nbsp;mm per decade) and IMERG shows
           {{TREND_IMERG}}.</li>
-      <li><strong>The products agree on the season, not on anomalies.</strong> Their monthly totals correlate at
-          r&nbsp;≥&nbsp;{{R_PROD_TOTAL_MIN}}, but their monthly anomalies only at {{R_PROD_ANOM_RANGE}} and their
-          detrended annual totals at {{R_PROD_ANNUAL_RANGE}}. Which months and years count as "wet" over CAR
+      <li><strong>The products agree on the season, not on anomalies.</strong> Their monthly totals for 2021–2025
+          correlate at r&nbsp;≥&nbsp;{{R_PROD_TOTAL_MIN}}, but their monthly anomalies over the same months only at
+          {{R_PROD_ANOM_RANGE}}, and their detrended annual totals for 1998–2025 at {{R_PROD_ANNUAL_RANGE}}. Which months and years count as "wet" over CAR
           depends heavily on the product, a problem for any national-rainfall trigger.</li>
     </ol>
   </div>

@@ -716,7 +716,8 @@ lazyTable("t-monthly-comp", [
     a.textContent = "#";
     a.setAttribute("aria-label", "Link to " + label);
     a.addEventListener("click", () => {
-      try { navigator.clipboard.writeText(location.href.split("#")[0] + "#" + id); } catch (e) { /* clipboard is optional */ }
+      /* clipboard is optional (needs a secure context and permission) */
+      try { navigator.clipboard.writeText(location.href.split("#")[0] + "#" + id).catch(() => {}); } catch (e) { /* no clipboard API */ }
     });
     host.appendChild(a);
   };

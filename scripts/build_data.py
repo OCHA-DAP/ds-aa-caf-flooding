@@ -227,7 +227,7 @@ def chirps_month(month: pd.Timestamp, geom) -> dict:
             [geom], out_shape=a.shape, transform=src.window_transform(win), invert=True
         )
     vals = a[inside]
-    if (vals < 0).any():
+    if not np.isfinite(vals).all() or (vals < 0).any():
         raise ValueError(f"CHIRPS no-data inside CAR in {month:%Y-%m}")
     return {"valid_date": month, "mean": float(vals.mean()), "n_pixels": int(vals.size)}
 
@@ -240,14 +240,17 @@ def load_chirps(geom) -> pd.DataFrame:
     everything, e.g. after a CHIRPS revision).
     """
     cache = RAW / CHIRPS_RAW_NAME
-    have = (
-        set(pd.read_csv(cache, parse_dates=["valid_date"])["valid_date"])
-        if cache.exists()
-        else set()
-    )
+    have = set()
+    if cache.exists():
+        # drop rows a killed run may have left half-written, so they are refetched
+        old = pd.read_csv(cache, parse_dates=["valid_date"])
+        ok = np.isfinite(old["mean"]) & np.isfinite(old["n_pixels"])
+        old[ok].to_csv(cache, index=False)
+        have = set(old.loc[ok, "valid_date"])
     with urllib.request.urlopen(CHIRPS_DIR, timeout=60) as r:
         listing = r.read().decode()
     found = re.findall(r"chirps-v3\.0\.(\d{4})\.(\d{2})\.cog", listing)
+    assert found, "CHIRPS directory listing has no monthly COGs (format changed?)"
     todo = sorted({pd.Timestamp(int(y), int(m), 1) for y, m in found} - have)
     if todo:
         print(f"fetching {len(todo)} CHIRPS months", flush=True)
@@ -272,6 +275,8 @@ def load_chirps(geom) -> pd.DataFrame:
             )
     out = pd.read_csv(cache, parse_dates=["valid_date"]).drop_duplicates("valid_date")
     out = out.sort_values("valid_date").reset_index(drop=True)
+    # every month is masked on the same grid; a different count means CHIRPS changed
+    assert out["n_pixels"].nunique() == 1, out["n_pixels"].value_counts()
     out.to_csv(cache, index=False)
     return out
 
@@ -348,14 +353,18 @@ def rainfall_tables(era5, imerg, chirps):
         fit_rows.append({"product": product, "month": m, "_a": res.intercept, "_b": res.slope})
     rain = rain.merge(pd.DataFrame(fit_rows), on=["product", "month"], how="left")
     rain["trend_mm"] = rain["_a"] + rain["_b"] * rain["year"]
-    rain["detrended_mm"] = rain["precip_mm"] - rain["trend_mm"]
+    # residuals only inside the fit window: elsewhere they would be extrapolations
+    in_window = rain["full_year"] & rain["year"].between(*TREND_COMMON)
+    rain["detrended_mm"] = (rain["precip_mm"] - rain["trend_mm"]).where(in_window)
     rain["cumul_detrended_mm"] = rain.groupby(["product", "year"])["detrended_mm"].cumsum()
     rain = rain.drop(columns=["_a", "_b"])
     rain.to_csv(PROC / "rain_monthly.csv", index=False)
 
     rain_full = rain[rain["full_year"]]
     rain_annual = (
-        rain_full.groupby(["product", "year"])[["precip_mm", "detrended_mm"]].sum().reset_index()
+        rain_full.groupby(["product", "year"])[["precip_mm", "detrended_mm"]]
+        .sum(min_count=12)
+        .reset_index()
     )
     clim_annual = clim.groupby("product").sum()
     rain_annual["anomaly_pct"] = 100 * (
