@@ -111,3 +111,8 @@ staticfiles/
 # uv.lock
 
 # End of file
+
+# Site build outputs (data never enters git; only the encrypted site is published)
+data/
+site_build/
+site_encrypted/
