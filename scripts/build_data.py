@@ -2,27 +2,40 @@
 
 Ports the logic of exploration/ocha_impact.ipynb into one reproducible pass:
 
-- raw: the OCHA CAR flood compilation as received (blob), and national ERA5
+- raw: the OCHA CAR flood compilation as received (blob); national ERA5
   (monthly) and IMERG late v7 (daily) zonal means (prod DB public.era5 /
-  public.imerg, pcode CF)
+  public.imerg, pcode CF); and CHIRPS v3 monthly national means, read
+  window-only from the UCSB cloud-optimised GeoTIFFs (the team has no CHIRPS
+  observation pipeline) and cached in data/raw
 - processed: impact events matched to adm3 pcodes, monthly / annual / admin
-  aggregates, rainfall totals, trends and anomalies for both products, the
-  impact x rainfall comparison tables, and simplified boundaries
+  aggregates, rainfall totals, trends, anomalies and detrended anomalies for
+  the three products, the impact x rainfall comparison tables, and simplified
+  boundaries
 
-IMERG is not in the notebook: it is here as a robustness check on the ERA5
-result, because ERA5 shows a steep drying trend over CAR that IMERG does not.
+IMERG and CHIRPS are not in the notebook: they are here as robustness checks on
+the ERA5 result, because ERA5 shows a steep drying trend over CAR that the
+other two do not. Detrending (per calendar month, linear, 1998-2025) removes
+that trend before comparing rainfall with impact.
 
-Everything is written under data/ (gitignored). Needs blob access and prod DB
-read access; locally the DB is only reachable through the SSH tunnel, so set
-DSCI_AZ_DB_PROD_HOST=127.0.0.1:15433 (see `db-tunnel up`).
+Everything is written under data/ (gitignored). The raw extracts are cached in
+data/raw and reused; pass --refresh to re-pull the workbook (blob) and the ERA5
+/ IMERG extracts (prod DB; locally only reachable through the SSH tunnel, so set
+DSCI_AZ_DB_PROD_HOST=127.0.0.1:15433, see `db-tunnel up`). CHIRPS is always
+topped up with any new months.
 """
 
-from io import BytesIO
+import argparse
+import re
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
 import ocha_stratus as stratus
 import pandas as pd
+import rasterio
+from rasterio.features import geometry_mask
+from rasterio.windows import from_bounds
 from scipy.stats import linregress, pearsonr, spearmanr, t
 
 from src.constants import ISO3, PROJECT_PREFIX
@@ -39,10 +52,14 @@ IMPACT_RAW_NAME = "OCHA_CAR_donnees_inondations_compil_2021-2025.xlsx"
 # years with no alert are treated as zero people affected.
 IMPACT_YEARS = range(2021, 2026)
 
-PRODUCTS = ["ERA5", "IMERG"]
+PRODUCTS = ["ERA5", "IMERG", "CHIRPS"]
 CLIM_YEARS = (2001, 2020)  # shared baseline for monthly anomalies (IMERG starts 1998)
-TREND_COMMON = (1998, 2025)  # full years both products cover
+TREND_COMMON = (1998, 2025)  # full years all three products cover; also the detrending fit
+TREND_FULL = (1981, 2025)  # full ERA5 / CHIRPS record
 MIN_IMERG_DAYS = 25
+
+CHIRPS_DIR = "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/cogs/"
+CHIRPS_RAW_NAME = "chirps_v3_caf_adm0_monthly.csv"
 
 # Commune spellings in the compilation -> FieldMaps adm3 names (normalised).
 NAME_FIXES = {
@@ -103,10 +120,8 @@ def normalize(s: pd.Series) -> pd.Series:
     return s.astype(str).str.strip().str.lower().str.replace(r"\s+", " ", regex=True)
 
 
-def load_impact() -> tuple[pd.DataFrame, bytes]:
-    raw = stratus.load_blob_data(IMPACT_BLOB)
-    df = pd.read_excel(BytesIO(raw), sheet_name=IMPACT_SHEET)
-    return df, raw
+def load_impact() -> bytes:
+    return stratus.load_blob_data(IMPACT_BLOB)
 
 
 def match_adm3(df: pd.DataFrame, adm3: pd.DataFrame) -> pd.DataFrame:
@@ -191,6 +206,83 @@ def load_imerg() -> pd.DataFrame:
         return pd.read_sql(query, conn, parse_dates=["valid_date"])
 
 
+CHIRPS_ENV = dict(
+    GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR",
+    GDAL_HTTP_TIMEOUT="30",
+    GDAL_HTTP_CONNECTTIMEOUT="15",
+    GDAL_HTTP_MAX_RETRY="3",
+    GDAL_HTTP_RETRY_DELAY="2",
+)
+
+
+def chirps_month(month: pd.Timestamp, geom) -> dict:
+    """CHIRPS v3 national mean for one month (mm), reading only the CAR window."""
+    url = f"/vsicurl/{CHIRPS_DIR}chirps-v3.0.{month.year}.{month.month:02d}.cog"
+    minx, miny, maxx, maxy = geom.bounds
+    with rasterio.Env(**CHIRPS_ENV), rasterio.open(url) as src:
+        win = from_bounds(minx - 0.1, miny - 0.1, maxx + 0.1, maxy + 0.1, src.transform)
+        win = win.round_offsets().round_lengths()
+        a = src.read(1, window=win)
+        inside = geometry_mask(
+            [geom], out_shape=a.shape, transform=src.window_transform(win), invert=True
+        )
+    vals = a[inside]
+    if (vals < 0).any():
+        raise ValueError(f"CHIRPS no-data inside CAR in {month:%Y-%m}")
+    return {"valid_date": month, "mean": float(vals.mean()), "n_pixels": int(vals.size)}
+
+
+def load_chirps(geom) -> pd.DataFrame:
+    """National mean CHIRPS v3 monthly totals (mm), 1981 to the latest month.
+
+    Cached in data/raw and resumable: each month is appended as it arrives and
+    only months missing from the cache are fetched (delete the file to refetch
+    everything, e.g. after a CHIRPS revision).
+    """
+    cache = RAW / CHIRPS_RAW_NAME
+    have = (
+        set(pd.read_csv(cache, parse_dates=["valid_date"])["valid_date"])
+        if cache.exists()
+        else set()
+    )
+    with urllib.request.urlopen(CHIRPS_DIR, timeout=60) as r:
+        listing = r.read().decode()
+    found = re.findall(r"chirps-v3\.0\.(\d{4})\.(\d{2})\.cog", listing)
+    todo = sorted({pd.Timestamp(int(y), int(m), 1) for y, m in found} - have)
+    if todo:
+        print(f"fetching {len(todo)} CHIRPS months", flush=True)
+        if not cache.exists():
+            cache.write_text("valid_date,mean,n_pixels\n")
+        failed = []
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            futures = {ex.submit(chirps_month, m, geom): m for m in todo}
+            for i, fut in enumerate(as_completed(futures), 1):
+                try:
+                    row = fut.result()
+                except Exception as e:  # keep the rest; report and fail below
+                    failed.append((futures[fut], e))
+                    continue
+                with cache.open("a") as f:
+                    f.write(f"{row['valid_date']:%Y-%m-%d},{row['mean']},{row['n_pixels']}\n")
+                if i % 50 == 0:
+                    print(f"  {i}/{len(todo)}", flush=True)
+        if failed:
+            raise RuntimeError(
+                f"{len(failed)} CHIRPS months failed (re-run to resume): {failed[:3]}"
+            )
+    out = pd.read_csv(cache, parse_dates=["valid_date"]).drop_duplicates("valid_date")
+    out = out.sort_values("valid_date").reset_index(drop=True)
+    out.to_csv(cache, index=False)
+    return out
+
+
+def chirps_monthly_mm(chirps: pd.DataFrame) -> pd.DataFrame:
+    d = chirps["valid_date"]
+    return pd.DataFrame(
+        {"product": "CHIRPS", "year": d.dt.year, "month": d.dt.month, "precip_mm": chirps["mean"]}
+    )
+
+
 def era5_monthly_mm(era5: pd.DataFrame) -> pd.DataFrame:
     """ERA5 stores the monthly mean daily rate (mm/day); convert to monthly totals."""
     d = era5["valid_date"]
@@ -224,21 +316,150 @@ def imerg_monthly_mm(imerg: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def rainfall_tables(era5, imerg, chirps):
+    """Monthly/annual rainfall per product with anomalies, detrended values and trends."""
+    rain = pd.concat(
+        [era5_monthly_mm(era5), imerg_monthly_mm(imerg), chirps_monthly_mm(chirps)],
+        ignore_index=True,
+    )
+    rain = rain.sort_values(["product", "year", "month"]).reset_index(drop=True)
+    # a dropped month would make the cumulative totals silently too low
+    for product in PRODUCTS:
+        got = rain[(rain["product"] == product) & rain["year"].isin(IMPACT_YEARS)]
+        assert len(got) == 12 * len(IMPACT_YEARS), f"{product} is missing months in {IMPACT_YEARS}"
+    rain["full_year"] = rain.groupby(["product", "year"])["month"].transform("count") == 12
+    rain["cumul_mm"] = rain.groupby(["product", "year"])["precip_mm"].cumsum()
+    clim = (
+        rain[rain["year"].between(*CLIM_YEARS)]
+        .groupby(["product", "month"])["precip_mm"]
+        .mean()
+        .rename("clim_mm")
+    )
+    rain = rain.join(clim, on=["product", "month"])
+    rain["anomaly_mm"] = rain["precip_mm"] - rain["clim_mm"]
+
+    # Detrended anomaly: residual from a linear trend fitted per product and
+    # calendar month over TREND_COMMON. OLS fits on the same years are additive,
+    # so cumulative and annual detrended values are sums of the monthly ones.
+    fit_rows = []
+    in_fit = rain["full_year"] & rain["year"].between(*TREND_COMMON)
+    for (product, m), g in rain[in_fit].groupby(["product", "month"]):
+        res = linregress(g["year"], g["precip_mm"])
+        fit_rows.append({"product": product, "month": m, "_a": res.intercept, "_b": res.slope})
+    rain = rain.merge(pd.DataFrame(fit_rows), on=["product", "month"], how="left")
+    rain["trend_mm"] = rain["_a"] + rain["_b"] * rain["year"]
+    rain["detrended_mm"] = rain["precip_mm"] - rain["trend_mm"]
+    rain["cumul_detrended_mm"] = rain.groupby(["product", "year"])["detrended_mm"].cumsum()
+    rain = rain.drop(columns=["_a", "_b"])
+    rain.to_csv(PROC / "rain_monthly.csv", index=False)
+
+    rain_full = rain[rain["full_year"]]
+    rain_annual = (
+        rain_full.groupby(["product", "year"])[["precip_mm", "detrended_mm"]].sum().reset_index()
+    )
+    clim_annual = clim.groupby("product").sum()
+    rain_annual["anomaly_pct"] = 100 * (
+        rain_annual["precip_mm"] / rain_annual["product"].map(clim_annual) - 1
+    )
+    rain_annual.to_csv(PROC / "rain_annual.csv", index=False)
+
+    # Linear trend per calendar month (and annual, month 0): over the record all
+    # three products share, and over the full ERA5 / CHIRPS record.
+    trend_rows = []
+    periods = [(p, TREND_COMMON) for p in PRODUCTS] + [(p, TREND_FULL) for p in ["ERA5", "CHIRPS"]]
+    for product, (y0, y1) in periods:
+        for m in range(0, 13):
+            sel = (
+                rain_annual[(rain_annual["product"] == product)]
+                if m == 0
+                else rain_full[(rain_full["product"] == product) & (rain_full["month"] == m)]
+            )
+            sel = sel[sel["year"].between(y0, y1)]
+            res = linregress(sel["year"], sel["precip_mm"])
+            trend_rows.append(
+                {
+                    "product": product,
+                    "period": f"{y0}-{y1}",
+                    "month": m,
+                    "slope_mm_per_decade": 10 * res.slope,
+                    "ci95_mm_per_decade": 10 * t.ppf(0.975, len(sel) - 2) * res.stderr,
+                    "p_value": res.pvalue,
+                }
+            )
+    trends = pd.DataFrame(trend_rows)
+    trends.to_csv(PROC / "rain_trends.csv", index=False)
+    return rain, rain_annual, trends
+
+
+def impact_vs_rain(annual, monthly, rain, rain_annual):
+    """Join impact to rainfall: annual table, cumulative correlations, monthly table."""
+    wide_annual = rain_annual.pivot(
+        index="year", columns="product", values=["precip_mm", "detrended_mm"]
+    )
+    wide_annual.columns = [
+        f"{p.lower()}_annual_mm" if v == "precip_mm" else f"{p.lower()}_annual_detrended_mm"
+        for v, p in wide_annual.columns
+    ]
+    comp_annual = annual.reset_index().join(wide_annual, on="year")
+    comp_annual.to_csv(PROC / "impact_vs_rain_annual.csv", index=False)
+
+    corr_rows = []
+    y = comp_annual["people_affected"].to_numpy()
+    for product in PRODUCTS:
+        for basis, col in [("raw", "cumul_mm"), ("detrended", "cumul_detrended_mm")]:
+            cum = rain[rain["product"] == product].pivot(index="year", columns="month", values=col)
+            for m in range(1, 13):
+                x = cum.loc[comp_annual["year"], m].to_numpy()
+                r, p = pearsonr(x, y)
+                corr_rows.append(
+                    {
+                        "product": product,
+                        "basis": basis,
+                        "through_month": m,
+                        "n_years": len(y),
+                        "pearson_r": r,
+                        "p_value": p,
+                        "spearman_rho": spearmanr(x, y)[0],
+                    }
+                )
+    corr = pd.DataFrame(corr_rows)
+    corr.to_csv(PROC / "cumulative_rain_correlation.csv", index=False)
+
+    wide_monthly = rain.pivot_table(
+        index=["year", "month"],
+        columns="product",
+        values=["precip_mm", "anomaly_mm", "detrended_mm"],
+    )
+    wide_monthly.columns = [f"{prod.lower()}_{var}" for var, prod in wide_monthly.columns]
+    comp_monthly = monthly.join(wide_monthly, on=["year", "month"])
+    comp_monthly.to_csv(PROC / "impact_vs_rain_monthly.csv", index=False)
+    return comp_annual, corr, comp_monthly
+
+
 def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--refresh", action="store_true", help="re-pull the blob and DB extracts")
+    refresh = ap.parse_args().refresh
     RAW.mkdir(parents=True, exist_ok=True)
     PROC.mkdir(parents=True, exist_ok=True)
 
-    # --- raw ---------------------------------------------------------------
-    df_raw, raw_bytes = load_impact()
-    (RAW / IMPACT_RAW_NAME).write_bytes(raw_bytes)
+    # --- raw (cached in data/raw unless --refresh) ---------------------------
+    impact_path = RAW / IMPACT_RAW_NAME
+    if refresh or not impact_path.exists():
+        impact_path.write_bytes(load_impact())
+    df_raw = pd.read_excel(impact_path, sheet_name=IMPACT_SHEET)
 
-    era5 = load_era5()
-    era5.to_csv(RAW / "era5_caf_adm0_monthly.csv", index=False)
-    imerg = load_imerg()
-    imerg.to_csv(RAW / "imerg_caf_adm0_daily.csv", index=False)
+    era5_path, imerg_path = RAW / "era5_caf_adm0_monthly.csv", RAW / "imerg_caf_adm0_daily.csv"
+    if refresh or not era5_path.exists():
+        load_era5().to_csv(era5_path, index=False)
+    if refresh or not imerg_path.exists():
+        load_imerg().to_csv(imerg_path, index=False)
+    era5 = pd.read_csv(era5_path, parse_dates=["valid_date"])
+    imerg = pd.read_csv(imerg_path, parse_dates=["valid_date"])
 
     adm3 = stratus.codab.load_codab_from_fieldmaps(iso3=ISO3.lower(), admin_level=3)
     adm1 = stratus.codab.load_codab_from_fieldmaps(iso3=ISO3.lower(), admin_level=1)
+    chirps = load_chirps(adm1.geometry.union_all())
 
     # --- impact events -----------------------------------------------------
     ev = match_adm3(df_raw, adm3)
@@ -318,112 +539,9 @@ def main() -> None:
     )
     by_adm1.to_csv(PROC / "impact_adm1_by_year.csv", index=False)
 
-    # --- rainfall: ERA5 + IMERG monthly totals ----------------------------
-    rain = pd.concat([era5_monthly_mm(era5), imerg_monthly_mm(imerg)], ignore_index=True)
-    rain = rain.sort_values(["product", "year", "month"]).reset_index(drop=True)
-    # a dropped IMERG month would make the cumulative totals silently too low
-    for product in PRODUCTS:
-        got = rain[(rain["product"] == product) & rain["year"].isin(IMPACT_YEARS)]
-        assert len(got) == 12 * len(IMPACT_YEARS), f"{product} is missing months in {IMPACT_YEARS}"
-    rain["cumul_mm"] = rain.groupby(["product", "year"])["precip_mm"].cumsum()
-    clim = (
-        rain[rain["year"].between(*CLIM_YEARS)]
-        .groupby(["product", "month"])["precip_mm"]
-        .mean()
-        .rename("clim_mm")
-    )
-    rain = rain.join(clim, on=["product", "month"])
-    rain["anomaly_mm"] = rain["precip_mm"] - rain["clim_mm"]
-    rain.to_csv(PROC / "rain_monthly.csv", index=False)
-
-    n_months = rain.groupby(["product", "year"])["month"].transform("count")
-    rain_full = rain[n_months == 12]
-    rain_annual = rain_full.groupby(["product", "year"])["precip_mm"].sum().reset_index()
-    clim_annual = clim.groupby("product").sum()
-    rain_annual["anomaly_pct"] = 100 * (
-        rain_annual["precip_mm"] / rain_annual["product"].map(clim_annual) - 1
-    )
-    rain_annual.to_csv(PROC / "rain_annual.csv", index=False)
-
-    # Linear trend per calendar month: over the common record (both products)
-    # and over the full ERA5 record (what the notebook showed).
-    trend_rows = []
-    for product, (y0, y1) in [
-        ("ERA5", TREND_COMMON),
-        ("IMERG", TREND_COMMON),
-        ("ERA5", (1981, 2025)),
-    ]:
-        for m in range(1, 13):
-            sel = rain_full[
-                (rain_full["product"] == product)
-                & (rain_full["month"] == m)
-                & rain_full["year"].between(y0, y1)
-            ]
-            res = linregress(sel["year"], sel["precip_mm"])
-            trend_rows.append(
-                {
-                    "product": product,
-                    "period": f"{y0}-{y1}",
-                    "month": m,
-                    "slope_mm_per_decade": 10 * res.slope,
-                    "ci95_mm_per_decade": 10 * t.ppf(0.975, len(sel) - 2) * res.stderr,
-                    "p_value": res.pvalue,
-                }
-            )
-    for product, (y0, y1) in [
-        ("ERA5", TREND_COMMON),
-        ("IMERG", TREND_COMMON),
-        ("ERA5", (1981, 2025)),
-    ]:
-        sel = rain_annual[(rain_annual["product"] == product) & rain_annual["year"].between(y0, y1)]
-        res = linregress(sel["year"], sel["precip_mm"])
-        trend_rows.append(
-            {
-                "product": product,
-                "period": f"{y0}-{y1}",
-                "month": 0,
-                "slope_mm_per_decade": 10 * res.slope,
-                "ci95_mm_per_decade": 10 * t.ppf(0.975, len(sel) - 2) * res.stderr,
-                "p_value": res.pvalue,
-            }
-        )
-    trends = pd.DataFrame(trend_rows)
-    trends.to_csv(PROC / "rain_trends.csv", index=False)
-
-    # --- impact x rainfall -------------------------------------------------
-    wide_annual = rain_annual.pivot(index="year", columns="product", values="precip_mm")
-    wide_annual.columns = [f"{c.lower()}_annual_mm" for c in wide_annual.columns]
-    comp_annual = annual.reset_index().join(wide_annual, on="year")
-    comp_annual.to_csv(PROC / "impact_vs_rain_annual.csv", index=False)
-
-    corr_rows = []
-    for product in PRODUCTS:
-        cum = rain[rain["product"] == product].pivot(
-            index="year", columns="month", values="cumul_mm"
-        )
-        for m in range(1, 13):
-            x = cum.loc[comp_annual["year"], m].to_numpy()
-            y = comp_annual["people_affected"].to_numpy()
-            r, p = pearsonr(x, y)
-            corr_rows.append(
-                {
-                    "product": product,
-                    "through_month": m,
-                    "n_years": len(y),
-                    "pearson_r": r,
-                    "p_value": p,
-                    "spearman_rho": spearmanr(x, y)[0],
-                }
-            )
-    corr = pd.DataFrame(corr_rows)
-    corr.to_csv(PROC / "cumulative_rain_correlation.csv", index=False)
-
-    wide_monthly = rain.pivot_table(
-        index=["year", "month"], columns="product", values=["precip_mm", "anomaly_mm"]
-    )
-    wide_monthly.columns = [f"{prod.lower()}_{var}" for var, prod in wide_monthly.columns]
-    comp_monthly = monthly.join(wide_monthly, on=["year", "month"])
-    comp_monthly.to_csv(PROC / "impact_vs_rain_monthly.csv", index=False)
+    # --- rainfall, and impact x rainfall ------------------------------------
+    rain, rain_annual, trends = rainfall_tables(era5, imerg, chirps)
+    comp_annual, corr, comp_monthly = impact_vs_rain(annual, monthly, rain, rain_annual)
 
     # --- boundaries for the map (simplified, ~100 m) -------------------------
     totals3 = by_adm3.groupby("adm3_src")[["events", "people_affected"]].sum()
@@ -442,15 +560,15 @@ def main() -> None:
     print(f"match methods: {events['match_method'].value_counts().to_dict()}")
     print(comp_annual.round(0).to_string(index=False))
     print(trends[trends["month"] == 0].round(2).to_string(index=False))
-    print(corr[corr["through_month"].isin([9, 11, 12])].round(2).to_string(index=False))
+    sel = corr[corr["through_month"].isin([9, 12])]
+    print(sel.round(2).to_string(index=False))
     for product in PRODUCTS:
-        c = comp_monthly.dropna(subset=[f"{product.lower()}_precip_mm"])
-        for var in ["precip_mm", "anomaly_mm"]:
-            x = c[f"{product.lower()}_{var}"]
+        for var in ["precip_mm", "anomaly_mm", "detrended_mm"]:
+            x = comp_monthly[f"{product.lower()}_{var}"]
+            yy = comp_monthly["people_affected"]
             print(
-                f"monthly {product} {var} vs people (n={len(c)}): "
-                f"pearson {pearsonr(x, c['people_affected'])[0]:.2f}, "
-                f"spearman {spearmanr(x, c['people_affected'])[0]:.2f}"
+                f"monthly {product} {var} vs people (n={len(x)}): "
+                f"pearson {pearsonr(x, yy)[0]:.2f}, spearman {spearmanr(x, yy)[0]:.2f}"
             )
 
 

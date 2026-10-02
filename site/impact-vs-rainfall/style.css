@@ -89,7 +89,7 @@ p.lede { color:var(--n8); max-width:76ch; margin:0 0 10px; }
 .controls .clabel { font-size:12px; color:var(--n7); }
 
 details.data { margin:4px 0 10px; font-size:13px; }
-details.data summary { cursor:pointer; color:var(--p6); font-weight:500; width:max-content; }
+details.data summary { cursor:pointer; color:var(--p6); font-weight:500; width:max-content; max-width:100%; }
 .tbl-wrap { border:1px solid var(--n1); border-radius:2px; overflow:auto; max-height:360px; margin-top:6px; }
 table.t { border-collapse:collapse; width:100%; font-size:12.5px; }
 table.t th { position:sticky; top:0; background:var(--n05); text-align:left; font-weight:600;
@@ -158,3 +158,11 @@ footer { border-top:1px solid var(--n1); padding:16px 44px 30px; font-size:12px;
   #map { height:380px; }
 }
 @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+
+/* "#" permalinks on section headings and figure titles (added by app.js) */
+.anchor { margin-left:6px; color:var(--n6); text-decoration:none; font-weight:400;
+          font-family:var(--font-body); opacity:0; transition:opacity .12s ease; }
+h2:hover .anchor, h3:hover .anchor, .fig-title:hover .anchor, .anchor:focus-visible { opacity:1; }
+.anchor:hover { color:var(--p6); }
+@media (hover:none) { .anchor { opacity:.55; } }
+section, .fig[id], h3[id], #findings { scroll-margin-top:12px; }

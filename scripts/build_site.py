@@ -27,6 +27,7 @@ SITE = ROOT / "site"
 OUT = ROOT / "site_build"
 
 YEARS = list(range(2021, 2026))
+PRODUCTS = ["ERA5", "IMERG", "CHIRPS"]
 # Alerts in the public HDX version of the compilation (resource updated 2025-01-21).
 HDX_ROWS = 174
 HDX_URL = "https://data.humdata.org/dataset/republique-centrafricaine-situation-des-inondations"
@@ -38,6 +39,8 @@ RAW_FILES = {
     "from the prod DB table public.era5",
     "imerg_caf_adm0_daily.csv": "IMERG late v7 national zonal stats, daily (mm/day), from the "
     "prod DB table public.imerg",
+    "chirps_v3_caf_adm0_monthly.csv": "CHIRPS v3 national mean, monthly total (mm), read by "
+    "build_data.py from the UCSB cloud-optimised GeoTIFFs (pixels inside CAR, 0.05°)",
 }
 PROCESSED_FILES = {
     "impact_events_adm3.csv": "One row per alert with adm1–adm3 names and pcodes, how it was "
@@ -45,9 +48,10 @@ PROCESSED_FILES = {
     "impact_monthly.csv": "Alerts, people and households affected per month, zero-filled 2021–2025",
     "impact_adm3_by_year.csv": "Alerts and people affected per commune (adm3) and year",
     "impact_adm1_by_year.csv": "Alerts and people affected per prefecture (adm1) and year",
-    "rain_monthly.csv": "ERA5 and IMERG monthly national totals (mm), cumulative since January, "
-    "2001–2020 average and anomaly",
-    "rain_annual.csv": "ERA5 and IMERG annual national totals (mm), complete years only",
+    "rain_monthly.csv": "ERA5, IMERG and CHIRPS monthly national totals (mm), cumulative since "
+    "January, 2001–2020 average and anomaly, 1998–2025 linear trend and detrended anomaly",
+    "rain_annual.csv": "ERA5, IMERG and CHIRPS annual national totals and detrended anomalies "
+    "(mm), complete years only",
     "rain_trends.csv": "Linear trend per calendar month (month 0 = annual), mm/decade with 95% CI",
     "impact_vs_rain_annual.csv": "People affected per year alongside each product's annual rainfall",
     "impact_vs_rain_monthly.csv": "People affected per month alongside monthly rainfall and anomalies",
@@ -160,7 +164,8 @@ def main() -> None:
     jaso = monthly.loc[monthly["month"].between(7, 10), "people_affected"].sum() / people
     adm1_tot = adm1_year.groupby("adm1_name")["people_affected"].sum().sort_values(ascending=False)
     top2 = adm1_tot.iloc[:2]
-    c12 = corr[corr["through_month"] == 12].set_index("product")
+    c12 = corr[(corr["through_month"] == 12) & (corr["basis"] == "raw")].set_index("product")
+    c12d = corr[(corr["through_month"] == 12) & (corr["basis"] == "detrended")].set_index("product")
     tr = trends.set_index(["product", "period", "month"])
     era5_98, imerg_98 = tr.loc[("ERA5", "1998-2025", 0)], tr.loc[("IMERG", "1998-2025", 0)]
     era5_81 = tr.loc[("ERA5", "1981-2025", 0)]
@@ -172,15 +177,62 @@ def main() -> None:
         if n_drier == len(YEARS)
         else f"all five impact years fall among ERA5's {n_drier} driest years since 1981"
     )
-    both = comp_m.dropna(subset=["era5_precip_mm", "imerg_precip_mm"])
-    r_products = pearsonr(both["era5_precip_mm"], both["imerg_precip_mm"])[0]
+    chirps_98 = tr.loc[("CHIRPS", "1998-2025", 0)]
+    chirps_81 = tr.loc[("CHIRPS", "1981-2025", 0)]
+    # CHIRPS spreads the impact years across its record; the caution box says so
+    chirps_a = rain_a[rain_a["product"] == "CHIRPS"].set_index("year")["precip_mm"]
+    chirps_pct = chirps_a.loc[1981:2025].rank(pct=True).loc[YEARS]
+    assert chirps_pct.max() - chirps_pct.min() > 0.5, "CHIRPS no longer spreads 2021-25 out"
+
+    # how well the products agree: monthly totals and anomalies 2021-2025, and
+    # detrended annual totals over the shared record
+    pairs = [("era5", "imerg"), ("era5", "chirps"), ("imerg", "chirps")]
+    r_total = [pearsonr(comp_m[f"{a}_precip_mm"], comp_m[f"{b}_precip_mm"])[0] for a, b in pairs]
+    r_anom = [pearsonr(comp_m[f"{a}_anomaly_mm"], comp_m[f"{b}_anomaly_mm"])[0] for a, b in pairs]
+    detr_wide = rain_a.pivot(index="year", columns="product", values="detrended_mm").loc[1998:2025]
+    r_annual = [pearsonr(detr_wide[a.upper()], detr_wide[b.upper()])[0] for a, b in pairs]
+
+    # which of the five impact years each product calls the wettest
+    wettest = {
+        prod: int(
+            rain_a[(rain_a["product"] == prod) & rain_a["year"].isin(YEARS)]
+            .set_index("year")["precip_mm"]
+            .idxmax()
+        )
+        for prod in PRODUCTS
+    }
+    groups: dict[int, list[str]] = {}
+    for prod, yr in wettest.items():
+        groups.setdefault(yr, []).append(prod)
+    wettest_text = (
+        "The products disagree on which year was wettest: "
+        + "; ".join(
+            f"{' and '.join(ps)} {'say' if len(ps) > 1 else 'says'} {yr}"
+            for yr, ps in groups.items()
+        )
+        + "."
+        if len(groups) > 1
+        else f"All three products make {next(iter(groups))} the wettest year."
+    )
+
+    # the single largest month: wetter than usual in every product (the text says so),
+    # and the anomaly correlations with and without it
+    big = comp_m.loc[comp_m["people_affected"].idxmax()]
+    anom_cols = [f"{q.lower()}_{v}" for q in PRODUCTS for v in ["anomaly_mm", "detrended_mm"]]
+    assert (big[anom_cols] > 0).all(), big
+    rest = comp_m.drop(index=big.name)
+    r_anom_x = [pearsonr(rest[c], rest["people_affected"])[0] for c in anom_cols]
+
     df_n = len(comp_a) - 2
     t_crit = t.ppf(0.975, df_n)
     r_crit = t_crit / np.sqrt(t_crit**2 + df_n)
+    # the "Five points" box says only raw ERA5 clears the bar at year-end
+    clears = corr[(corr["through_month"] == 12) & (corr["pearson_r"].abs() > r_crit)]
+    assert set(zip(clears["product"], clears["basis"])) == {("ERA5", "raw")}, clears
 
     monthly_corr = []
-    for prod in ["ERA5", "IMERG"]:
-        for var, col in [("total", "precip_mm"), ("anom", "anomaly_mm")]:
+    for prod in PRODUCTS:
+        for var, col in [("total", "precip_mm"), ("anom", "anomaly_mm"), ("detr", "detrended_mm")]:
             c = comp_m.dropna(subset=[f"{prod.lower()}_{col}"])
             x = c[f"{prod.lower()}_{col}"]
             monthly_corr.append(
@@ -196,7 +248,7 @@ def main() -> None:
 
     # trend lines 1998-2025 for the annual chart
     trend_lines = {}
-    for prod in ["ERA5", "IMERG"]:
+    for prod in PRODUCTS:
         s = rain_a[(rain_a["product"] == prod) & rain_a["year"].between(1998, 2025)]
         res = linregress(s["year"], s["precip_mm"])
         trend_lines[prod] = {
@@ -209,6 +261,8 @@ def main() -> None:
     n_hh = ev["households_affected"].sum()
     fmt = lambda v: f"{v:,.0f}"  # noqa: E731
     signed = lambda v: ("+" if v >= 0 else "−") + f"{abs(v):.0f}"  # noqa: E731
+    rtxt = lambda v: f"{v:.2f}".replace("-", "−")  # noqa: E731
+    span = lambda vs: f"{rtxt(min(vs))}{' to ' if min(vs) < 0 else '–'}{rtxt(max(vs))}"  # noqa: E731
     first, last = ev["date_alert"].min(), ev["date_alert"].max()
     n_2025 = int((ev["year"] == 2025).sum())
     methods = ev["match_method"].value_counts()
@@ -233,10 +287,27 @@ def main() -> None:
             f"{100 * top2.sum() / people:.0f}% of people affected."
         ),
         "R_ERA5": f"{c12.loc['ERA5', 'pearson_r']:.2f}",
-        "R_IMERG": f"{c12.loc['IMERG', 'pearson_r']:.2f}".replace("-", "−"),
-        "RHO_TOTAL": f"{np.mean([mc[('ERA5', 'total')]['rho'], mc[('IMERG', 'total')]['rho']]):.1f}",
-        "RHO_ANOM_ERA5": f"{mc[('ERA5', 'anom')]['rho']:.2f}".replace("-", "−"),
-        "RHO_ANOM_IMERG": f"{mc[('IMERG', 'anom')]['rho']:.2f}".replace("-", "−"),
+        "R_IMERG": rtxt(c12.loc["IMERG", "pearson_r"]),
+        "R_CHIRPS": rtxt(c12.loc["CHIRPS", "pearson_r"]),
+        "R_ERA5_DETR": rtxt(c12d.loc["ERA5", "pearson_r"]),
+        "RHO_TOTAL": f"{np.mean([mc[(p, 'total')]['rho'] for p in PRODUCTS]):.1f}",
+        "RHO_ANOM_RANGE": span([mc[(p, v)]["rho"] for p in PRODUCTS for v in ["anom", "detr"]]),
+        "R_ANOM_RANGE": span([mc[(p, v)]["r"] for p in PRODUCTS for v in ["anom", "detr"]]),
+        "R_ANOM_RANGE_X": span(r_anom_x),
+        "BIG_MONTH": f"{pd.Timestamp(int(big['year']), int(big['month']), 1):%b %Y}",
+        "BIG_PEOPLE": fmt(big["people_affected"]),
+        "WETTEST_TEXT": wettest_text,
+        "R_PROD_TOTAL_MIN": f"{min(r_total):.2f}",
+        "R_PROD_ANOM_RANGE": span(r_anom),
+        "R_PROD_ANNUAL_RANGE": span(r_annual),
+        "ERA5_80S": fmt(era5_a.loc[1981:1990].mean()),
+        "CHIRPS_80S": fmt(chirps_a.loc[1981:1990].mean()),
+        "ERA5_LAST10": fmt(era5_a.loc[2016:2025].mean()),
+        "CHIRPS_LAST10": fmt(chirps_a.loc[2016:2025].mean()),
+        "TREND_CHIRPS": signed(chirps_98["slope_mm_per_decade"]),
+        "TREND_CHIRPS_CI": f"{chirps_98['ci95_mm_per_decade']:.0f}",
+        "TREND_CHIRPS_FULL": signed(chirps_81["slope_mm_per_decade"]),
+        "TREND_CHIRPS_FULL_CI": f"{chirps_81['ci95_mm_per_decade']:.0f}",
         "TREND_ERA5": signed(era5_98["slope_mm_per_decade"]),
         "TREND_ERA5_ABS": f"{abs(era5_98['slope_mm_per_decade']):.0f}",
         "TREND_ERA5_CI": f"{era5_98['ci95_mm_per_decade']:.0f}",
@@ -245,7 +316,6 @@ def main() -> None:
         "TREND_IMERG": signed(imerg_98["slope_mm_per_decade"]),
         "TREND_IMERG_CI": f"{imerg_98['ci95_mm_per_decade']:.0f}",
         "ERA5_RANK_TEXT": rank_text,
-        "R_PRODUCTS": f"{r_products:.2f}",
         "R_CRIT": f"{r_crit:.2f}",
         "N_HDX": HDX_ROWS,
         "N_EXTRA_2024": len(ev) - n_2025 - HDX_ROWS,
@@ -290,8 +360,8 @@ def main() -> None:
                 "events": "events",
                 "people": "people_affected",
                 "households": "households_affected",
-                "era5": "era5_annual_mm",
-                "imerg": "imerg_annual_mm",
+                **{p.lower(): f"{p.lower()}_annual_mm" for p in PRODUCTS},
+                **{f"{p.lower()}_detr": f"{p.lower()}_annual_detrended_mm" for p in PRODUCTS},
             },
         ),
         "adm1_totals": [{"adm1": k, "people": r6(v)} for k, v in adm1_tot.items()],
@@ -316,6 +386,7 @@ def main() -> None:
         "corr": [
             {
                 "product": r["product"],
+                "basis": r["basis"],
                 "month": int(r["through_month"]),
                 "n": int(r["n_years"]),
                 "r": round(r["pearson_r"], 3),
@@ -331,10 +402,9 @@ def main() -> None:
                 "year": "year",
                 "month": "month",
                 "people": "people_affected",
-                "era5": "era5_precip_mm",
-                "imerg": "imerg_precip_mm",
-                "era5_anom": "era5_anomaly_mm",
-                "imerg_anom": "imerg_anomaly_mm",
+                **{p.lower(): f"{p.lower()}_precip_mm" for p in PRODUCTS},
+                **{f"{p.lower()}_anom": f"{p.lower()}_anomaly_mm" for p in PRODUCTS},
+                **{f"{p.lower()}_detr": f"{p.lower()}_detrended_mm" for p in PRODUCTS},
             },
         ),
         "geo_adm3": geo3,
@@ -384,16 +454,21 @@ def main() -> None:
     (OUT / "impact-vs-rainfall" / "index.html").write_text(page, encoding="utf-8")
 
     for k in [
+        "WETTEST_TEXT",
+        "RHO_ANOM_RANGE",
+        "R_PROD_TOTAL_MIN",
+        "R_PROD_ANOM_RANGE",
+        "R_PROD_ANNUAL_RANGE",
+        "TREND_CHIRPS",
+        "R_CHIRPS",
+        "R_ERA5_DETR",
         "PCT_JASO",
         "TOP2_TEXT",
         "R_ERA5",
         "R_IMERG",
-        "RHO_ANOM_ERA5",
-        "RHO_ANOM_IMERG",
         "TREND_ERA5",
         "TREND_IMERG",
         "ERA5_RANK_TEXT",
-        "R_PRODUCTS",
         "R_CRIT",
     ]:
         print(f"{k}: {values[k]}")

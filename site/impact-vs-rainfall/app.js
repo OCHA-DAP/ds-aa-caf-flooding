@@ -9,17 +9,21 @@
 const D = JSON.parse(document.getElementById("page-data").textContent);
 
 const C = {
-  impact: "#1e795f", era5: "#1862d8", imerg: "#aa7222",
+  impact: "#1e795f", era5: "#1862d8", imerg: "#aa7222", chirps: "#c2457a",
   grid: "#ebeff0", axis: "#c4d0d1", ink: "#1f2324", ink2: "#3f4748", muted: "#5e6a6b",
   surface: "#ffffff", band: "#f5f7f7", zero: "#7e8e8f",
 };
-const PRODUCT_COLOR = { ERA5: C.era5, IMERG: C.imerg };
+const PRODUCTS = ["ERA5", "IMERG", "CHIRPS"];
+const PRODUCT_COLOR = { ERA5: C.era5, IMERG: C.imerg, CHIRPS: C.chirps };
+const productLegend = (type) => PRODUCTS.map((p) => ({ label: p, color: PRODUCT_COLOR[p], type }));
+const productSeg = PRODUCTS.map((p) => ({ label: p, value: p }));
 const YEARS = [2021, 2022, 2023, 2024, 2025];
 const YEAR_COLOR = { 2021: "#7dc1ad", 2022: "#51ac92", 2023: "#269777", 2024: "#18614c", 2025: "#0f3c30" };
 const MAP_RAMP = ["#7dc1ad", "#51ac92", "#269777", "#18614c", "#0f3c30"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const fmt = (v) => (v == null || Number.isNaN(v) ? "–" : Math.round(v).toLocaleString("en-US"));
+const fmtR = (v, d = 2) => v.toFixed(d).replace("-", "−");
 const fmtSigned = (v, d = 0) => {
   const a = Math.abs(v).toFixed(d);
   return Number(a) === 0 ? a : (v > 0 ? "+" : "−") + a;
@@ -350,9 +354,19 @@ function scatter(el, o) {
     S("line", { x1: x(o.vref), x2: x(o.vref), y1: m.t, y2: H - m.b, stroke: C.zero }, svg);
   T(svg, (m.l + W - m.r) / 2, H - 6, o.xTitle, { "text-anchor": "middle", fill: C.ink2 });
   T(svg, m.l, m.t - 3, o.yTitle, { fill: C.ink2 });
+  const placed = [];
+  const free = (b) => placed.every((q) => b.x1 < q.x0 || b.x0 > q.x1 || b.y1 < q.y0 || b.y0 > q.y1);
   for (const p of o.points) {
     const c = S("circle", { cx: x(p.x), cy: y(p.y), r: o.r || 5, fill: p.color || o.color, stroke: C.surface, "stroke-width": 2, opacity: o.opacity || 1 }, svg);
-    if (p.label) T(svg, x(p.x) + 8, y(p.y) - 6, p.label, { fill: C.ink2, "font-size": 11.5 });
+    if (p.label) {
+      /* first spot (right-above, right-below, left-above, left-below) that clears earlier labels */
+      const lw = p.label.length * 6.8, px = x(p.x), py = y(p.y);
+      const spots = [[px + 8, py - 6, "start"], [px + 8, py + 15, "start"], [px - 8, py - 6, "end"], [px - 8, py + 15, "end"]];
+      const box = ([lx, ly, a]) => ({ x0: a === "end" ? lx - lw : lx, x1: a === "end" ? lx : lx + lw, y0: ly - 11, y1: ly + 2 });
+      const spot = spots.find((sp) => free(box(sp))) || spots[0];
+      placed.push(box(spot));
+      T(svg, spot[0], spot[1], p.label, { fill: C.ink2, "font-size": 11.5, "text-anchor": spot[2] });
+    }
     const hit = S("circle", { cx: x(p.x), cy: y(p.y), r: 12, fill: "transparent" }, svg);
     bindTip(hit, c, () => p.tip);
   }
@@ -449,22 +463,20 @@ register(() => {
   });
   const clim = (p) => D.rain_clim.filter((d) => d.product === p).sort((a, b) => a.month - b.month);
   groupedBars($("c-clim"), {
-    height: 200, cats: MONTHS.map((m) => m[0]), aria: "Average monthly rainfall 2001 to 2020, ERA5 and IMERG",
-    series: ["ERA5", "IMERG"].map((p) => ({ name: p, color: PRODUCT_COLOR[p], values: clim(p).map((d) => ({ v: d.mm })) })),
+    height: 200, cats: MONTHS.map((m) => m[0]), aria: "Average monthly rainfall 2001 to 2020, ERA5, IMERG and CHIRPS",
+    series: PRODUCTS.map((p) => ({ name: p, color: PRODUCT_COLOR[p], values: clim(p).map((d) => ({ v: d.mm })) })),
     fmtTick: (v) => fmt(v), tipTitle: (i) => MONTHS[i] + " average, 2001–2020", fmtTip: (d) => fmt(d.v) + " mm",
   });
 });
-legend($("l-clim"), [{ label: "ERA5", color: C.era5 }, { label: "IMERG", color: C.imerg }]);
+legend($("l-clim"), productLegend());
 lazyTable("t-season", [
   { label: "Month", get: (r) => MONTHS[r.month - 1] },
   { label: "People affected (2021–25)", num: true, get: (r) => fmt(r.people) },
-  { label: "ERA5 avg (mm)", num: true, get: (r) => fmt(r.era5) }, { label: "IMERG avg (mm)", num: true, get: (r) => fmt(r.imerg) },
-], () => MONTHS.map((_, i) => ({
+  ...PRODUCTS.map((p) => ({ label: `${p} avg (mm)`, num: true, get: (r) => fmt(r[p]) })),
+], () => MONTHS.map((_, i) => Object.assign({
   month: i + 1,
   people: D.impact_monthly.filter((d) => d.month === i + 1).reduce((a, d) => a + d.people, 0),
-  era5: (D.rain_clim.find((d) => d.product === "ERA5" && d.month === i + 1) || {}).mm,
-  imerg: (D.rain_clim.find((d) => d.product === "IMERG" && d.month === i + 1) || {}).mm,
-})));
+}, Object.fromEntries(PRODUCTS.map((p) => [p, (D.rain_clim.find((d) => d.product === p && d.month === i + 1) || {}).mm])))));
 
 register(() => {
   columnChart($("c-annual"), {
@@ -574,33 +586,33 @@ lazyTable("t-adm3", [
 
 /* 3 · rainfall */
 register(() => {
-  const series = ["ERA5", "IMERG"].map((p) => {
+  const series = PRODUCTS.map((p) => {
     const pts = D.rain_annual.filter((d) => d.product === p).map((d) => [d.year, d.mm]);
     const tr = D.trend_lines[p];
     return { name: p, color: PRODUCT_COLOR[p], points: pts, trend: tr ? [[tr.x0, tr.y0], [tr.x1, tr.y1]] : null };
   });
-  lineChart($("c-rain-annual"), { series, band: [2021, 2025], bandLabel: "impact record", height: 270, fmtY: (v) => fmt(v) + " mm", aria: "Annual national rainfall, ERA5 1981 to 2025 and IMERG 1998 to 2025" });
+  lineChart($("c-rain-annual"), { series, band: [2021, 2025], bandLabel: "impact record", height: 280, fmtY: (v) => fmt(v) + " mm", aria: "Annual national rainfall: ERA5 and CHIRPS 1981 to 2025, IMERG 1998 to 2025" });
 });
-legend($("l-rain-annual"), [{ label: "ERA5", color: C.era5, type: "line" }, { label: "IMERG", color: C.imerg, type: "line" }]);
+legend($("l-rain-annual"), productLegend("line"));
 lazyTable("t-rain-annual", [
   { label: "Year", get: (r) => r.year },
-  { label: "ERA5 (mm)", num: true, get: (r) => fmt(r.era5) }, { label: "IMERG (mm)", num: true, get: (r) => fmt(r.imerg) },
+  ...PRODUCTS.map((p) => ({ label: `${p} (mm)`, num: true, get: (r) => fmt(r[p]) })),
 ], () => {
   const yrs = [...new Set(D.rain_annual.map((d) => d.year))].sort();
   const g = (p, y) => (D.rain_annual.find((d) => d.product === p && d.year === y) || {}).mm;
-  return yrs.map((y) => ({ year: y, era5: g("ERA5", y), imerg: g("IMERG", y) }));
+  return yrs.map((y) => Object.assign({ year: y }, Object.fromEntries(PRODUCTS.map((p) => [p, g(p, y)]))));
 });
 
 register(() => {
   const tr = (p) => D.trends.filter((d) => d.product === p && d.period === "1998-2025" && d.month > 0).sort((a, b) => a.month - b.month);
   groupedBars($("c-trend"), {
     height: 240, cats: MONTHS.map((m) => m[0]), aria: "Linear rainfall trend by calendar month, 1998 to 2025",
-    series: ["ERA5", "IMERG"].map((p) => ({ name: p, color: PRODUCT_COLOR[p], values: tr(p).map((d) => ({ v: d.slope, lo: d.slope - d.ci, hi: d.slope + d.ci, p: d.p })) })),
+    series: PRODUCTS.map((p) => ({ name: p, color: PRODUCT_COLOR[p], values: tr(p).map((d) => ({ v: d.slope, lo: d.slope - d.ci, hi: d.slope + d.ci, p: d.p })) })),
     fmtTick: (v) => fmtSigned(v), tipTitle: (i) => MONTHS[i] + " trend, 1998–2025",
     fmtTip: (d) => `${fmtSigned(d.v, 1)} ± ${(d.hi - d.v).toFixed(1)} mm/decade`,
   });
 });
-legend($("l-trend"), [{ label: "ERA5", color: C.era5 }, { label: "IMERG", color: C.imerg }]);
+legend($("l-trend"), productLegend());
 lazyTable("t-trend", [
   { label: "Product", get: (r) => r.product }, { label: "Period", get: (r) => r.period },
   { label: "Month", get: (r) => (r.month ? MONTHS[r.month - 1] : "Annual") },
@@ -609,68 +621,120 @@ lazyTable("t-trend", [
 ], () => D.trends);
 
 /* 4 · impact vs rainfall */
-let annualProduct = "ERA5";
+const BASIS = [{ label: "Rainfall", value: "raw" }, { label: "Detrended", value: "detrended" }];
+let annualProduct = "ERA5", annualBasis = "raw";
 function drawAnnualScatter() {
-  const p = annualProduct, key = p.toLowerCase();
+  const p = annualProduct, detr = annualBasis === "detrended";
+  const key = p.toLowerCase() + (detr ? "_detr" : "");
+  const what = detr ? `${p} annual rainfall, detrended` : `${p} annual rainfall`;
   const pts = D.comp_annual.map((d) => ({
     x: d[key], y: d.people, label: String(d.year), color: PRODUCT_COLOR[p],
-    tip: [String(d.year), [{ color: PRODUCT_COLOR[p], value: fmt(d[key]) + " mm", label: `${p} annual rainfall` }, { value: fmt(d.people), label: "people affected" }]],
+    tip: [String(d.year), [{ color: PRODUCT_COLOR[p], value: (detr ? fmtSigned(d[key]) : fmt(d[key])) + " mm", label: what }, { value: fmt(d.people), label: "people affected" }]],
   }));
-  scatter($("c-annual-scatter"), { points: pts, yZero: true, xTitle: `${p} annual national rainfall (mm)`, yTitle: "People affected", height: 300, aria: `People affected per year against ${p} annual rainfall` });
-  const c = D.corr.find((d) => d.product === p && d.month === 12);
-  $("r-annual").textContent = `${p}: r = ${c.r.toFixed(2)} (Spearman ρ = ${c.rho.toFixed(1)}), n = ${c.n} years`;
+  scatter($("c-annual-scatter"), {
+    points: pts, yZero: true, height: 300, vref: detr ? 0 : null, fmtX: detr ? (v) => fmtSigned(v) : fmt,
+    xTitle: detr ? `${p} annual national rainfall minus its 1998–2025 trend (mm)` : `${p} annual national rainfall (mm)`,
+    yTitle: "People affected", aria: `People affected per year against ${what}`,
+  });
+  const c = D.corr.find((d) => d.product === p && d.basis === annualBasis && d.month === 12);
+  $("r-annual").textContent = `${p}${detr ? ", detrended" : ""}: r = ${fmtR(c.r)} (Spearman ρ = ${fmtR(c.rho, 1)}), n = ${c.n} years`;
 }
-seg($("s-annual"), [{ label: "ERA5", value: "ERA5" }, { label: "IMERG", value: "IMERG" }], "ERA5", (v) => { annualProduct = v; drawAnnualScatter(); });
+seg($("s-annual"), productSeg, "ERA5", (v) => { annualProduct = v; drawAnnualScatter(); });
+seg($("s-annual-b"), BASIS, "raw", (v) => { annualBasis = v; drawAnnualScatter(); });
 register(drawAnnualScatter);
 lazyTable("t-annual", [
   { label: "Year", get: (r) => r.year }, { label: "Alerts", num: true, get: (r) => r.events },
   { label: "People affected", num: true, get: (r) => fmt(r.people) },
-  { label: "ERA5 (mm)", num: true, get: (r) => fmt(r.era5) }, { label: "IMERG (mm)", num: true, get: (r) => fmt(r.imerg) },
+  ...PRODUCTS.map((p) => ({ label: `${p} (mm)`, num: true, get: (r) => fmt(r[p.toLowerCase()]) })),
+  ...PRODUCTS.map((p) => ({ label: `${p} detrended (mm)`, num: true, get: (r) => fmtSigned(r[p.toLowerCase() + "_detr"]) })),
 ], () => D.comp_annual);
 
-register(() => {
-  const cr = (p) => D.corr.filter((d) => d.product === p).sort((a, b) => a.month - b.month);
+let corrBasis = "raw";
+function drawCorr() {
+  const cr = (p) => D.corr.filter((d) => d.product === p && d.basis === corrBasis).sort((a, b) => a.month - b.month);
   groupedBars($("c-corr"), {
     height: 240, cats: MONTHS.map((m) => m[0]), yDomain: [-1, 1], aria: "Correlation of cumulative rainfall since January with annual people affected",
-    series: ["ERA5", "IMERG"].map((p) => ({ name: p, color: PRODUCT_COLOR[p], values: cr(p).map((d) => ({ v: d.r, p: d.p })) })),
+    series: PRODUCTS.map((p) => ({ name: p, color: PRODUCT_COLOR[p], values: cr(p).map((d) => ({ v: d.r, p: d.p })) })),
     refs: [{ v: D.summary.r_crit, label: `p < 0.05 at n = 5 (r = ${D.summary.r_crit.toFixed(2)})` }, { v: -D.summary.r_crit }],
-    fmtTick: (v) => v.toFixed(1), tipTitle: (i) => `Rain Jan–${MONTHS[i]} vs people affected that year`,
-    fmtTip: (d) => `r = ${d.v.toFixed(2)} (p = ${d.p.toFixed(2)})`,
+    fmtTick: (v) => v.toFixed(1), tipTitle: (i) => `Rain Jan–${MONTHS[i]}${corrBasis === "detrended" ? " (detrended)" : ""} vs people affected that year`,
+    fmtTip: (d) => `r = ${fmtR(d.v)} (p = ${d.p.toFixed(2)})`,
   });
-});
-legend($("l-corr"), [{ label: "ERA5", color: C.era5 }, { label: "IMERG", color: C.imerg }]);
+}
+seg($("s-corr"), BASIS, "raw", (v) => { corrBasis = v; drawCorr(); });
+register(drawCorr);
+legend($("l-corr"), productLegend());
 lazyTable("t-corr", [
-  { label: "Product", get: (r) => r.product }, { label: "Rain from Jan through", get: (r) => MONTHS[r.month - 1] },
-  { label: "Pearson r", num: true, get: (r) => r.r.toFixed(2) }, { label: "p", num: true, get: (r) => r.p.toFixed(3) },
-  { label: "Spearman ρ", num: true, get: (r) => r.rho.toFixed(2) }, { label: "Years", num: true, get: (r) => r.n },
+  { label: "Product", get: (r) => r.product }, { label: "Rainfall", get: (r) => r.basis },
+  { label: "Rain from Jan through", get: (r) => MONTHS[r.month - 1] },
+  { label: "Pearson r", num: true, get: (r) => fmtR(r.r) }, { label: "p", num: true, get: (r) => r.p.toFixed(3) },
+  { label: "Spearman ρ", num: true, get: (r) => fmtR(r.rho) }, { label: "Years", num: true, get: (r) => r.n },
 ], () => D.corr);
 
+const MVAR = [{ label: "Rainfall", value: "total" }, { label: "Anomaly", value: "anom" }, { label: "Detrended", value: "detr" }];
+const MVAR_TEXT = { total: "rainfall", anom: "anomaly vs 2001–2020 average", detr: "anomaly vs 1998–2025 trend" };
 let monthlyProduct = "ERA5", monthlyVar = "total";
 function drawMonthlyScatter() {
-  const key = monthlyProduct.toLowerCase() + (monthlyVar === "total" ? "" : "_anom");
+  const key = monthlyProduct.toLowerCase() + (monthlyVar === "total" ? "" : "_" + monthlyVar);
+  const signed = monthlyVar !== "total";
   const pts = D.comp_monthly.filter((d) => d[key] != null).map((d) => ({
     x: d[key], y: d.people, color: PRODUCT_COLOR[monthlyProduct],
     tip: [`${MONTHS[d.month - 1]} ${d.year}`, [
-      { color: PRODUCT_COLOR[monthlyProduct], value: (monthlyVar === "total" ? fmt(d[key]) : fmtSigned(d[key])) + " mm", label: `${monthlyProduct} ${monthlyVar === "total" ? "rainfall" : "anomaly vs 2001–2020"}` },
+      { color: PRODUCT_COLOR[monthlyProduct], value: (signed ? fmtSigned(d[key]) : fmt(d[key])) + " mm", label: `${monthlyProduct} ${MVAR_TEXT[monthlyVar]}` },
       { value: fmt(d.people), label: "people affected" }]],
   }));
   scatter($("c-monthly-scatter"), {
-    points: pts, yZero: true, r: 4.5, opacity: 0.85, vref: monthlyVar === "total" ? null : 0, height: 300,
-    xTitle: `${monthlyProduct} monthly national rainfall${monthlyVar === "total" ? "" : " anomaly"} (mm)`, yTitle: "People affected that month",
-    fmtX: monthlyVar === "total" ? fmt : (v) => fmtSigned(v), aria: "People affected per month against monthly rainfall",
+    points: pts, yZero: true, r: 4.5, opacity: 0.85, vref: signed ? 0 : null, height: 300,
+    xTitle: `${monthlyProduct} monthly national ${MVAR_TEXT[monthlyVar]} (mm)`, yTitle: "People affected that month",
+    fmtX: signed ? (v) => fmtSigned(v) : fmt, aria: "People affected per month against monthly rainfall",
   });
   const s = D.monthly_corr.find((d) => d.product === monthlyProduct && d.var === monthlyVar);
-  $("r-monthly").textContent = `Spearman ρ = ${s.rho.toFixed(2)}, Pearson r = ${s.r.toFixed(2)}, n = ${s.n} months`;
+  $("r-monthly").textContent = `Spearman ρ = ${fmtR(s.rho)}, Pearson r = ${fmtR(s.r)}, n = ${s.n} months`;
 }
-seg($("s-monthly-p"), [{ label: "ERA5", value: "ERA5" }, { label: "IMERG", value: "IMERG" }], "ERA5", (v) => { monthlyProduct = v; drawMonthlyScatter(); });
-seg($("s-monthly-v"), [{ label: "Rainfall", value: "total" }, { label: "Anomaly", value: "anom" }], "total", (v) => { monthlyVar = v; drawMonthlyScatter(); });
+seg($("s-monthly-p"), productSeg, "ERA5", (v) => { monthlyProduct = v; drawMonthlyScatter(); });
+seg($("s-monthly-v"), MVAR, "total", (v) => { monthlyVar = v; drawMonthlyScatter(); });
 register(drawMonthlyScatter);
 lazyTable("t-monthly-comp", [
   { label: "Year", get: (r) => r.year }, { label: "Month", get: (r) => MONTHS[r.month - 1] },
   { label: "People affected", num: true, get: (r) => fmt(r.people) },
-  { label: "ERA5 (mm)", num: true, get: (r) => fmt(r.era5) }, { label: "ERA5 anomaly", num: true, get: (r) => fmtSigned(r.era5_anom) },
-  { label: "IMERG (mm)", num: true, get: (r) => fmt(r.imerg) }, { label: "IMERG anomaly", num: true, get: (r) => (r.imerg_anom == null ? "–" : fmtSigned(r.imerg_anom)) },
+  ...PRODUCTS.flatMap((p) => {
+    const k = p.toLowerCase();
+    return [
+      { label: `${p} (mm)`, num: true, get: (r) => fmt(r[k]) },
+      { label: `${p} anomaly`, num: true, get: (r) => (r[k + "_anom"] == null ? "–" : fmtSigned(r[k + "_anom"])) },
+      { label: `${p} detrended`, num: true, get: (r) => (r[k + "_detr"] == null ? "–" : fmtSigned(r[k + "_detr"])) },
+    ];
+  }),
 ], () => D.comp_monthly);
+
+/* ── heading anchors: a "#" link on every section heading and figure title ── */
+(function anchors() {
+  const add = (host, id, label) => {
+    if (!host || !id) return;
+    const a = document.createElement("a");
+    a.className = "anchor";
+    a.href = "#" + id;
+    a.textContent = "#";
+    a.setAttribute("aria-label", "Link to " + label);
+    a.addEventListener("click", () => {
+      try { navigator.clipboard.writeText(location.href.split("#")[0] + "#" + id); } catch (e) { /* clipboard is optional */ }
+    });
+    host.appendChild(a);
+  };
+  document.querySelectorAll("section[id] > h2").forEach((h) => add(h, h.parentElement.id, h.textContent));
+  document.querySelectorAll(".fig[id] .fig-title").forEach((t) => add(t, t.closest(".fig").id, t.textContent));
+  document.querySelectorAll("h3[id]").forEach((h) => add(h, h.id, h.textContent));
+  /* staticrypt writes the page after load, so the browser never scrolls to the hash
+     itself. Jump now (the charts above are already drawn), then once more after fonts
+     and the page finish loading, unless the reader has scrolled in the meantime. */
+  const target = () => location.hash && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+  const go = () => { const el = target(); if (el) el.scrollIntoView({ behavior: "instant", block: "start" }); };
+  go();
+  const settled = scrollY;
+  const again = () => { if (Math.abs(scrollY - settled) < 2) go(); };
+  if (document.fonts) document.fonts.ready.then(again);
+  if (document.readyState !== "complete") addEventListener("load", again, { once: true });
+  addEventListener("hashchange", go);
+})();
 
 /* re-render on width change */
 let rt = null, lastW = innerWidth;
