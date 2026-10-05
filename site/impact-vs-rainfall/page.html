@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAR floods: impact vs rainfall</title>
+<meta name="description" content="OCHA CAR flood alerts 2021–2025 against ERA5, IMERG and CHIRPS national rainfall: seasonality, geography, rainfall record and correlation.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@700&family=Roboto:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<style>{{CSS}}</style>
+</head>
+<body>
+<div class="wrap">
+<a class="home-link" href="../">← CAR floods</a>
+
+<header class="hero">
+  <canvas id="bg" aria-hidden="true"></canvas>
+  <div class="inner">
+    <p class="eyebrow">OCHA Centre for Humanitarian Data · Exploratory analysis</p>
+    <h1>Floods in the Central African Republic: impact vs rainfall</h1>
+    <p>OCHA CAR's compilation of flood alerts ({{PERIOD}}) set against national rainfall
+       from ERA5, IMERG and CHIRPS: when and where floods are reported, how the rainfall
+       record behaves, and whether wetter years or months mean more people affected. This
+       is scoping work, not an anticipatory-action trigger.</p>
+  </div>
+</header>
+
+<main>
+  <nav class="toc" aria-label="Sections">
+    <a href="#when">When</a><a href="#where">Where</a><a href="#rainfall">Rainfall record</a>
+    <a href="#link">Impact vs rainfall</a><a href="#method">Method &amp; caveats</a>
+    <a href="#downloads">Downloads</a>
+  </nav>
+
+  <div class="kpis">
+    <div class="kpi"><div class="lab">Flood alerts</div><div class="val">{{N_EVENTS}}</div><div class="note">{{PERIOD}}</div></div>
+    <div class="kpi"><div class="lab">People affected</div><div class="val">{{N_PEOPLE}}</div><div class="note">{{N_HOUSEHOLDS}} households</div></div>
+    <div class="kpi"><div class="lab">Communes with an alert</div><div class="val">{{N_ADM3}}</div><div class="note">of {{N_ADM3_ALL}} (adm3), in {{N_ADM1}} of {{N_ADM1_ALL}} prefectures</div></div>
+    <div class="kpi"><div class="lab">Worst year</div><div class="val">{{WORST_YEAR}}</div><div class="note">{{WORST_PEOPLE}} people affected</div></div>
+  </div>
+
+  <div class="findings">
+    <h3 id="findings">What the data show</h3>
+    <ol>
+      <li><strong>Flood impact follows the rainy season.</strong> {{PCT_JASO}}% of people affected
+          were reported in alerts from July to October, the four wettest months.</li>
+      <li><strong>2022 stands out,</strong> with {{WORST_PEOPLE}} people affected ({{WORST_PCT}}% of the
+          five-year total). {{TOP2_TEXT}}</li>
+      <li><strong>The year-to-year link with rainfall does not hold up.</strong> With ERA5, annual rainfall and
+          people affected correlate at r&nbsp;=&nbsp;{{R_ERA5}}, but that rests on five years and is driven by
+          2022. It falls to {{R_ERA5_DETR}} once ERA5's trend is removed, and the other products give
+          r&nbsp;=&nbsp;{{R_CHIRPS}} (CHIRPS) and {{R_IMERG}} (IMERG). {{WETTEST_TEXT}}</li>
+      <li><strong>Month to month, the link is mostly the shared season.</strong> Monthly rainfall and people
+          affected rank-correlate (ρ&nbsp;≈&nbsp;{{RHO_TOTAL}}), but once each month's usual rainfall or its
+          trend is removed, wetter-than-usual months are not generally worse (ρ&nbsp;{{RHO_ANOM_RANGE}}). Much of the
+          linear correlation comes from one month: {{BIG_MONTH}} ({{BIG_PEOPLE}} people affected) was much wetter
+          than usual in all three products. Pearson r is {{R_ANOM_RANGE}} with it and {{R_ANOM_RANGE_X}} without it
+          (ERA5 keeps the most).</li>
+      <li><strong>ERA5's drying over CAR is very likely an artefact.</strong> ERA5 has national rainfall
+          falling by {{TREND_ERA5_ABS}}&nbsp;mm per decade since 1998, which makes 2021–2025 its five driest
+          years. CHIRPS, which blends in rain-gauge data, shows no significant change
+          ({{TREND_CHIRPS}}&nbsp;±&nbsp;{{TREND_CHIRPS_CI}}&nbsp;mm per decade) and IMERG shows
+          {{TREND_IMERG}}.</li>
+      <li><strong>The products agree on the season, not on anomalies.</strong> Their monthly totals for 2021–2025
+          correlate at r&nbsp;≥&nbsp;{{R_PROD_TOTAL_MIN}}, but their monthly anomalies over the same months only at
+          {{R_PROD_ANOM_RANGE}}, and their detrended annual totals for 1998–2025 at {{R_PROD_ANNUAL_RANGE}}. Which months and years count as "wet" over CAR
+          depends heavily on the product, a problem for any national-rainfall trigger.</li>
+    </ol>
+  </div>
+
+  <!-- ─────────────────────────────── WHEN ─────────────────────────────── -->
+  <section id="when">
+    <h2>When floods are reported</h2>
+    <p class="lede">Each row of the compilation is an <em>alert</em>: a flood reported in a commune by OCHA
+       sub-offices, RRM partners, IOM, government services and others, with the people and households
+       affected. Alerts are dated when they were raised, which may be some days after the flooding.</p>
+
+    <div class="fig" id="fig-monthly">
+      <div class="fig-head"><div><div class="fig-title">People affected by month of alert, 2021–2025</div>
+        <div class="fig-sub">Months with no alert are zero. Hover for the number of alerts.</div></div></div>
+      <div class="chart" id="c-monthly"></div>
+      <details class="data" id="t-monthly"><summary>Show data</summary><div class="tbl"></div></details>
+    </div>
+
+    <div class="two">
+      <div class="fig" id="fig-season">
+        <div class="fig-head"><div><div class="fig-title">People affected by calendar month</div>
+          <div class="fig-sub">2021–2025 combined</div></div></div>
+        <div class="chart" id="c-season"></div>
+      </div>
+      <div class="fig" id="fig-clim">
+        <div class="fig-head"><div><div class="fig-title">Average monthly rainfall (mm)</div>
+          <div class="fig-sub">National mean, 2001–2020</div></div><div class="legend" id="l-clim"></div></div>
+        <div class="chart" id="c-clim"></div>
+      </div>
+    </div>
+    <details class="data" id="t-season"><summary>Show data</summary><div class="tbl"></div></details>
+
+    <div class="fig" id="fig-annual">
+      <div class="fig-head"><div><div class="fig-title">People affected per year</div>
+        <div class="fig-sub">2025 runs to the last alert in the compilation ({{LAST_ALERT}}).</div></div></div>
+      <div class="chart" id="c-annual"></div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────── WHERE ────────────────────────────── -->
+  <section id="where">
+    <h2>Where floods hit</h2>
+    <p class="lede">Alerts were matched by name to communes (adm3, the COD boundaries as served by FieldMaps).
+       The map can show communes or prefectures. Alert locations use the coordinates recorded in the
+       compilation, which are often the commune's main town.</p>
+    <div class="fig" id="fig-map">
+      <div class="fig-head">
+        <div><div class="fig-title">People affected, 2021–2025</div>
+          <div class="fig-sub">Five classes with equal numbers of affected units (quintiles); grey = no alert recorded</div></div>
+        <div class="controls"><div id="s-map"></div><div id="s-pts"></div></div>
+      </div>
+      <div id="map" role="region" aria-label="Map of people affected by commune or prefecture"></div>
+    </div>
+
+    <div class="fig" id="fig-adm1">
+      <div class="fig-head"><div><div class="fig-title">People affected by prefecture and year</div>
+        <div class="fig-sub">Prefectures with at least one alert</div></div><div class="legend" id="l-adm1"></div></div>
+      <div class="chart" id="c-adm1"></div>
+      <details class="data" id="t-adm3"><summary>Show all communes</summary><div class="tbl"></div></details>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────── RAINFALL ───────────────────────────── -->
+  <section id="rainfall">
+    <h2>The rainfall record</h2>
+    <p class="lede">National mean rainfall from three independent products: <strong>ERA5</strong> (ECMWF
+       reanalysis, monthly, from 1981) and <strong>IMERG</strong> (NASA GPM satellite estimate, late run v7,
+       daily, from 1998), both from the team's raster-stats database, and <strong>CHIRPS v3</strong> (UCSB
+       Climate Hazards Center, satellite blended with rain-gauge data, monthly, from 1981), read directly
+       from the CHC's cloud-optimised files. All three have the same seasonal cycle, but ERA5 drifts: in
+       1981–1990 it averaged {{ERA5_80S}}&nbsp;mm a year against {{CHIRPS_80S}} for CHIRPS, and in 2016–2025
+       {{ERA5_LAST10}}&nbsp;mm against {{CHIRPS_LAST10}}.</p>
+
+    <div class="fig" id="fig-rain-annual">
+      <div class="fig-head"><div><div class="fig-title">Annual national rainfall (mm)</div>
+        <div class="fig-sub">Thin lines: linear trend 1998–2025. Shaded: 2021–2025, the years with impact data.</div></div>
+        <div class="legend" id="l-rain-annual"></div></div>
+      <div class="chart" id="c-rain-annual"></div>
+      <details class="data" id="t-rain-annual"><summary>Show data</summary><div class="tbl"></div></details>
+    </div>
+
+    <div class="caution"><strong>ERA5's trend over CAR is very likely an artefact.</strong> Over 1998–2025
+      ERA5 shows {{TREND_ERA5}}&nbsp;±&nbsp;{{TREND_ERA5_CI}}&nbsp;mm per decade, and over its full 1981–2025
+      record {{TREND_ERA5_FULL}}&nbsp;mm per decade (about {{TREND_ERA5_FULL_PCT}}% of its 2001–2020 average
+      per decade). Over the same periods CHIRPS shows {{TREND_CHIRPS}}&nbsp;±&nbsp;{{TREND_CHIRPS_CI}} and
+      {{TREND_CHIRPS_FULL}}&nbsp;±&nbsp;{{TREND_CHIRPS_FULL_CI}}&nbsp;mm per decade, neither significant, and IMERG
+      shows {{TREND_IMERG}}&nbsp;±&nbsp;{{TREND_IMERG_CI}}. A drift in the reanalysis, which assimilates very
+      few rain-gauge observations over CAR, is the likely explanation. Because of it, {{ERA5_RANK_TEXT}}, while
+      CHIRPS places them across its range. The impact comparisons below therefore also use
+      <a href="#fig-annual-scatter">detrended</a> rainfall.</div>
+
+    <div class="fig" id="fig-trend">
+      <div class="fig-head"><div><div class="fig-title">Rainfall trend by calendar month, 1998–2025 (mm per decade)</div>
+        <div class="fig-sub">Whiskers: 95% confidence interval of the linear trend</div></div>
+        <div class="legend" id="l-trend"></div></div>
+      <div class="chart" id="c-trend"></div>
+      <details class="data" id="t-trend"><summary>Show data (incl. ERA5 and CHIRPS 1981–2025, and annual totals)</summary><div class="tbl"></div></details>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── IMPACT vs RAINFALL ──────────────────────── -->
+  <section id="link">
+    <h2>Does more rain mean more people affected?</h2>
+    <p class="lede">Two time scales: year by year (are wetter years worse?) and month by month (are wetter
+       months worse?). National rainfall is a coarse stand-in for flood hazard. Many alerts are urban (Bangui)
+       or riverine (Oubangui, Ouham), driven by local downpours or upstream river levels that a national mean
+       cannot see.</p>
+    <p class="sub"><strong>Detrended</strong> rainfall is each product's rainfall minus its own linear trend,
+       fitted per calendar month over 1998–2025 (the years all three products cover). It removes ERA5's drift,
+       so a year counts as wet relative to its neighbours, not relative to the 1980s.</p>
+
+    <div class="fig" id="fig-annual-scatter">
+      <div class="fig-head">
+        <div><div class="fig-title">People affected vs annual rainfall</div>
+          <div class="fig-sub" id="r-annual"></div></div>
+        <div class="controls"><div id="s-annual"></div><div id="s-annual-b"></div></div>
+      </div>
+      <div class="chart" id="c-annual-scatter"></div>
+      <details class="data" id="t-annual"><summary>Show data</summary><div class="tbl"></div></details>
+    </div>
+    <div class="caution"><strong>Five points.</strong> With five years, a correlation needs |r|&nbsp;&gt;&nbsp;{{R_CRIT}}
+      to reach p&nbsp;&lt;&nbsp;0.05, and a single year can carry it. Here that year is 2022, with the most people
+      affected. {{WETTEST_TEXT}} Only raw ERA5 clears the bar, and that is the one series with a spurious trend.</div>
+
+    <div class="fig" id="fig-corr">
+      <div class="fig-head"><div><div class="fig-title">Correlation between rainfall accumulated since January and that year's people affected</div>
+        <div class="fig-sub">Pearson r over the five years 2021–2025, for rain from January to each month. This is the
+          notebook's original view: raw ERA5 reaches r&nbsp;≈&nbsp;{{R_ERA5}} by year-end.</div></div>
+        <div class="controls"><div id="s-corr"></div><div class="legend" id="l-corr"></div></div></div>
+      <div class="chart" id="c-corr"></div>
+      <details class="data" id="t-corr"><summary>Show data</summary><div class="tbl"></div></details>
+    </div>
+
+    <div class="fig" id="fig-monthly-scatter">
+      <div class="fig-head">
+        <div><div class="fig-title">People affected vs monthly rainfall, Jan 2021 – Dec 2025</div>
+          <div class="fig-sub" id="r-monthly"></div></div>
+        <div class="controls"><div id="s-monthly-p"></div><div id="s-monthly-v"></div></div>
+      </div>
+      <p class="sub">Raw rainfall mixes in the seasonal cycle, since rainfall and alerts both peak in
+         August–October. <em>Anomaly</em> subtracts each calendar month's 2001–2020 average; <em>Detrended</em>
+         subtracts each calendar month's 1998–2025 trend line. Both ask whether a <em>wetter-than-usual</em>
+         month brings more people affected.</p>
+      <div class="chart" id="c-monthly-scatter"></div>
+      <details class="data" id="t-monthly-comp"><summary>Show data</summary><div class="tbl"></div></details>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────── METHOD ─────────────────────────────── -->
+  <section id="method">
+    <h2>Method &amp; caveats</h2>
+    <ul class="method">
+      <li><strong>Impact data.</strong> OCHA CAR's “Données inondations” compilation (sheet <code>DATA FOR PBI</code>):
+        {{N_EVENTS}} alerts dated {{FIRST_ALERT}} to {{LAST_ALERT}}. A public version through 2024 ({{N_HDX}} alerts) is
+        <a href="https://data.humdata.org/dataset/republique-centrafricaine-situation-des-inondations">on HDX</a> (CC BY).
+        The copy used here adds {{N_EXTRA_2024}} later 2024 alerts and {{N_2025}} from 2025 that are not on HDX (and
+        revises a few earlier rows slightly), so this page is password-protected. Coverage is whatever was reported and may vary by year and area. A month
+        with no alert means nothing was recorded, not that nothing happened.</li>
+      <li><strong>People affected</strong> is the <code>Individus affecté</code> column ({{N_NULL_PEOPLE}} alerts have no
+        figure and count as zero), and households is <code>Ménage affecté</code>. Counts are summed across alerts, so a
+        commune hit twice in a year counts twice.</li>
+      <li><strong>Matching to communes.</strong> Commune names were normalised and matched to the FieldMaps COD adm3
+        names. {{N_NAME}} matched directly, and {{N_NAME_FIX}} needed a spelling fix (e.g. “4e Arrondissement” →
+        “Arrondissement 4”, “Bria” → Samba-Boungou). {{N_OVERRIDE}} were reassigned by hand from the sous-préfecture,
+        locality and coordinates (e.g. a row filed under the commune “Bangui” with locality “Mogoumba” → Mongoumba).
+        Four of those overrides are new since the notebook: checking each match against the compilation's own
+        prefecture column found communes filed as “Mbaïki” or “Yéngou” whose locality is in Batangafo, Bégoua,
+        Zinga or Bria. Each row's method is in <code>match_method</code> in the processed events file. Every alert
+        matched.</li>
+      <li><strong>Prefectures</strong> follow the COD boundaries: 16 prefectures plus Bangui. Alerts the compilation
+        files under prefectures created in the 2020–21 reform (Ouham-Fafa, Lim-Pendé, Mambéré) count under the COD
+        prefecture that contains them (Ouham, Ouham-Pendé, Mambéré-Kadéï). Bimbo is in Ombella-M'Poko, not Bangui.</li>
+      <li><strong>Rainfall.</strong> National (adm0) means. ERA5 stores monthly mean daily rates, converted to
+        monthly totals. IMERG daily values are averaged per month and scaled to the month's length; months with fewer
+        than 25 days of data are dropped. CHIRPS v3 monthly totals are averaged over the 0.05° pixels whose centres
+        fall inside CAR, read window-only from the CHC's global cloud-optimised GeoTIFFs. Anomalies are against
+        each product's own 2001–2020 monthly average. Detrended values are residuals from a least-squares line
+        fitted per product and calendar month over 1998–2025; because the fits share the same years, detrended
+        annual and cumulative totals are sums of the monthly residuals. Annual totals use complete years only
+        (2026 is excluded).</li>
+      <li><strong>Statistics.</strong> Trends are least-squares per calendar month, with a t-based 95% confidence interval
+        (no autocorrelation adjustment). Correlations are Pearson r with two-sided p, plus Spearman ρ, over n = 5 years
+        or n = 60 months. This is exploratory: many comparisons, no correction for multiple testing.</li>
+      <li><strong>Not a trigger.</strong> No forecast is evaluated here. The repository README states the work is not
+        currently for an anticipatory-action framework.</li>
+      <li><strong>Source.</strong> The analysis started in
+        <a href="https://github.com/OCHA-DAP/ds-aa-caf-flooding/blob/initial-analysis/exploration/ocha_impact.ipynb">exploration/ocha_impact.ipynb</a>.
+        This page is built by <code>scripts/build_data.py</code> and <code>scripts/build_site.py</code> in
+        <a href="https://github.com/OCHA-DAP/ds-aa-caf-flooding">OCHA-DAP/ds-aa-caf-flooding</a>. IMERG, CHIRPS and the
+        detrending are not in the notebook. They were added as robustness checks.</li>
+    </ul>
+  </section>
+
+  <!-- ──────────────────────────── DOWNLOADS ───────────────────────────── -->
+  <section id="downloads">
+    <h2>Downloads</h2>
+    <p class="lede">Every file is embedded in this (encrypted) page, so downloads work offline once it is open.
+       Please don't redistribute the raw OCHA workbook: the 2025 alerts are not yet public.</p>
+    <div class="dl-grid">
+      <div class="dl-group">
+        <h3 id="downloads-raw">Raw data</h3>
+        <div class="dl-all"><button type="button" class="btn btn-primary" id="dl-all-raw">Download all raw (zip)</button>
+          <a class="btn" href="https://data.humdata.org/dataset/republique-centrafricaine-situation-des-inondations">Public 2021–2024 version on HDX ↗</a></div>
+        <div id="dl-raw"></div>
+      </div>
+      <div class="dl-group">
+        <h3 id="downloads-processed">Processed data</h3>
+        <div class="dl-all"><button type="button" class="btn btn-primary" id="dl-all-processed">Download all processed (zip)</button></div>
+        <div id="dl-processed"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>Built {{BUILT}} · OCHA Centre for Humanitarian Data, Data Science team ·
+  impact data: OCHA Central African Republic · rainfall: ECMWF ERA5, NASA GPM IMERG, UCSB CHC CHIRPS v3 ·
+  boundaries: COD-AB via FieldMaps</footer>
+</div>
+
+<script id="page-data" type="application/json">{{DATA}}</script>
+<script id="page-files" type="application/json">{{FILES}}</script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>{{HERO_JS}}</script>
+<script>{{JS}}</script>
+</body>
+</html>

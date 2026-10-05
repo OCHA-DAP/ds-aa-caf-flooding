@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAR floods</title>
+<meta name="description" content="Central African Republic flood analyses by the OCHA Centre for Humanitarian Data.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* HDX v2 tokens + landing layout, from OCHA-DAP/ds-seas5-skill pages/assets/site.css
+ * (template lineage ds-geospatial-impact-estimates -> ds-seas5-skill). Light mode only. */
+:root {
+  --b5:#269777; --b6:#1e795f; --b7:#18614c; --b05:#e9f5f1; --b1:#d4eae4;
+  --n9:#1f2324; --n8:#3f4748; --n7:#5e6a6b; --n05:#f5f7f7;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--n05); color:var(--n9);
+  font-family:'Roboto',system-ui,-apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; line-height:1.5; }
+.wrap { max-width:1080px; margin:0 auto; background:#fff; min-height:100vh; box-shadow:0 0 40px rgba(31,35,36,.06); }
+.hero { position:relative; overflow:hidden; background:var(--b6); padding:56px 44px 48px; }
+.hero canvas { position:absolute; inset:0; width:100%; height:100%; z-index:0; }
+.hero .inner { position:relative; z-index:1; }
+.eyebrow { font-size:11px; letter-spacing:.15em; text-transform:uppercase; font-weight:700;
+  color:rgba(255,255,255,.88); margin:0 0 12px; text-shadow:0 1px 8px rgba(0,0,0,.25); }
+.hero h1 { font-family:'Merriweather',Georgia,'Times New Roman',serif; font-weight:700; font-size:34px;
+  line-height:1.2; color:#fff; margin:0 0 14px; text-shadow:0 2px 16px rgba(0,0,0,.28); }
+.hero p { margin:0; font-size:15px; line-height:1.6; color:#fff; max-width:64ch; text-shadow:0 1px 10px rgba(0,0,0,.25); }
+main { padding:36px 44px 8px; }
+.label { font-size:11px; font-weight:700; letter-spacing:.11em; text-transform:uppercase; color:var(--n7); margin:0 0 16px; }
+.label-2 { margin-top:30px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:16px; }
+.k { display:flex; flex-direction:column; text-decoration:none; color:inherit; background:#fff;
+  border:1px solid #e2e7e7; border-top:3px solid var(--b5); border-radius:5px; padding:18px 19px 14px;
+  transition:box-shadow .18s ease, transform .18s ease; }
+.k:hover, .k:focus-visible { box-shadow:0 4px 20px rgba(31,35,36,.10); transform:translateY(-2px); outline:none; }
+.k:focus-visible { border-color:var(--b5); box-shadow:0 0 0 3px var(--b1); }
+.k h2 { font-family:'Merriweather',Georgia,serif; margin:0 0 8px; font-size:16px; font-weight:700; color:var(--b6); line-height:1.25; }
+.k p { margin:0 0 14px; font-size:13.5px; color:var(--n8); line-height:1.55; flex:1; }
+.k .foot { display:flex; justify-content:space-between; align-items:center; gap:10px; font-size:10.5px;
+  color:var(--n7); text-transform:uppercase; letter-spacing:.06em; border-top:1px solid #f0f3f3; padding-top:10px; }
+.k .foot em { font-style:normal; color:var(--b5); font-weight:500; }
+.chip { display:inline-block; font-size:9px; padding:2.5px 7px; border-radius:10px; margin-left:7px;
+  text-transform:uppercase; letter-spacing:.07em; font-weight:700; vertical-align:2.5px; font-family:'Roboto',sans-serif; }
+.chip-ext { background:var(--b05); color:var(--b7); border:1px solid var(--b1); }
+.note { margin:30px 44px 40px; padding:13px 17px; border-radius:4px; background:var(--b05);
+  border-left:5px solid var(--b5); font-size:12.5px; color:var(--n8); line-height:1.6; }
+.note code { background:#fff; border:1px solid var(--b1); padding:1.5px 6px; border-radius:3px; font-size:11.5px; color:var(--b7); }
+.note a { color:var(--b6); }
+.note p { margin:0 0 9px; }
+.note p:last-child { margin-bottom:0; }
+@media (max-width:640px) {
+  .hero { padding:40px 16px 34px; }
+  .hero h1 { font-size:26px; }
+  main { padding:26px 16px 4px; }
+  .note { margin:24px 16px 32px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <canvas id="bg" aria-hidden="true"></canvas>
+    <div class="inner">
+      <p class="eyebrow">OCHA Centre for Humanitarian Data</p>
+      <h1>Floods in the Central African Republic</h1>
+      <p>Exploratory analysis of flood impact in CAR: OCHA's record of flood alerts and the people
+         affected, and how it relates to rainfall. Scoping work, not an anticipatory-action framework.</p>
+    </div>
+  </header>
+
+  <main>
+    <p class="label">Analyses</p>
+    <div class="grid">
+      <a class="k" href="impact-vs-rainfall/">
+        <h2>Flood impact vs rainfall, 2021–2025</h2>
+        <p>OCHA CAR's {{N_EVENTS}} flood alerts ({{N_PEOPLE}} people affected) against ERA5, IMERG and
+           CHIRPS national rainfall: seasonality, the most-affected communes and prefectures, the rainfall
+           record, and whether wetter years or months mean more people affected, raw and detrended. With
+           raw and processed data downloads.</p>
+        <span class="foot"><em>/impact-vs-rainfall/</em><span>{{BUILT_MONTH}}</span></span>
+      </a>
+    </div>
+
+    <p class="label label-2">Elsewhere</p>
+    <div class="grid">
+      <a class="k" href="https://data.humdata.org/dataset/republique-centrafricaine-situation-des-inondations">
+        <h2>OCHA CAR flood data on HDX<span class="chip chip-ext">External</span></h2>
+        <p>The public version of the flood-alert compilation (2021–2024, CC BY), published by OCHA
+           Central African Republic.</p>
+        <span class="foot"><em>data.humdata.org</em></span>
+      </a>
+    </div>
+  </main>
+
+  <div class="note">
+    <p><strong>Access.</strong> Password-protected: the impact data include 2025 alerts that OCHA CAR has
+       not yet published. Please don't share the password outside OCHA.</p>
+    <p><strong>Source.</strong> <a href="https://github.com/OCHA-DAP/ds-aa-caf-flooding">OCHA-DAP/ds-aa-caf-flooding</a>.
+       Pages are built by <code>scripts/build_site.py</code> and encrypted before publishing.</p>
+  </div>
+</div>
+<script>{{HERO_JS}}</script>
+</body>
+</html>
